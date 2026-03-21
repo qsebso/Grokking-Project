@@ -36,6 +36,13 @@ def op_div_or_sub(a, b, p):
     else:
         return (a - b) % p
 
+def op_add_or_sub(a, b, p):
+    """x ∘ y = x + y (mod p) if y is odd, else x - y (mod p)"""
+    if b % 2 == 1:
+        return (a + b) % p
+    else:
+        return (a - b) % p
+
 def op_sq_sum(a, b, p):
     """x ∘ y = x^2 + y^2 (mod p)"""
     return (a*a + b*b) % p
@@ -102,6 +109,7 @@ OPERATIONS = {
     "sub":           (op_sub,           False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "div":           (op_div,           False, lambda p: [(a, b) for a in range(p) for b in range(1, p)]),
     "div_or_sub":    (op_div_or_sub,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_sub":    (op_add_or_sub,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sq_sum":        (op_sq_sum,        False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sq_sum_xy":     (op_sq_sum_xy,     False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sq_sum_xy_x":   (op_sq_sum_xy_x,  False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
