@@ -36,12 +36,33 @@ import os
 import argparse
 import json
 
+import matplotlib.pyplot as plt # for plotting results (not strictly needed to run experiments)
+import subprocess #cuz I was lazy to keep cheking the terminal so I made the code to send me an iText when the experiment is done 
+
 # ── make sure local packages are importable regardless of CWD ────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from data.dataset     import make_dataset, OPERATIONS
 from experiments.train import TrainConfig, train
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# iMessage / SMS Notification Function
+# ─────────────────────────────────────────────────────────────────────────────
+
+def send_imessage_to_email(email: str, message: str):
+    """
+    Send an iMessage to an Apple ID email address via Messages app.
+    """
+    applescript = f'''
+    tell application "Messages"
+        set targetService to 1st service whose service type = iMessage
+        set targetBuddy to buddy "{email}" of targetService
+        send "{message}" to targetBuddy
+    end tell
+    '''
+    subprocess.run(["osascript", "-e", applescript])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
@@ -85,7 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--weight_decay", type=float, default=1.0)
 
     # ── training ─────────────────────────────────────────────────────────
-    p.add_argument("--num_epochs",   type=int,   default=5_000)
+    p.add_argument("--num_epochs",   type=int,   default=1)
     p.add_argument("--batch_size",   type=int,   default=None,
                    help="Mini-batch size. Omit for full-batch (default)")
     p.add_argument("--log_every",    type=int,   default=50)
@@ -148,6 +169,47 @@ def _save_result(result, results_dir: str):
     print(f"  ↳ saved to {path}")
 
 
+def _save_plot(result, results_dir: str):
+    os.makedirs(results_dir, exist_ok=True)
+
+    cfg = result.config
+    mts = f"_n{cfg.max_train_samples}" if cfg.max_train_samples else ""
+    fmt = f"_fmt{cfg.input_format}" if cfg.input_format != "a_op_b_eq" else ""
+
+    fname = (
+        f"{cfg.operation}_p{cfg.p}"
+        f"_wd{cfg.weight_decay}"
+        f"_lr{cfg.lr}"
+        f"_d{cfg.d_model}"
+        f"_l{cfg.num_layers}"
+        f"_tf{cfg.train_frac}"
+        f"{mts}{fmt}"
+        f"_ep{cfg.num_epochs}.png"
+    )
+
+    path = os.path.join(results_dir, fname)
+
+    # Plot
+    plt.figure(figsize=(8, 5))
+
+    # Train = red, Validation = green
+    plt.plot(result.log_epochs, result.train_accs, color="red", label="Train Acc")
+    plt.plot(result.log_epochs, result.val_accs,   color="green", label="Val Acc")
+
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.title(f"{cfg.operation} (p={cfg.p})")
+
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.savefig(path)
+    plt.close()
+
+    print(f"  ↳ plot saved to {path}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Run a single experiment
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,6 +228,7 @@ def run_one(cfg: TrainConfig, results_dir: str):
     print(f"  num_epochs         = {cfg.num_epochs}")
     print(f"  batch_size         = {cfg.batch_size if cfg.batch_size else 'full'}")
     print(f"{'='*60}")
+    
 
     train_ds, val_ds, vocab_size = make_dataset(
         operation          = cfg.operation,
@@ -180,8 +243,15 @@ def run_one(cfg: TrainConfig, results_dir: str):
 
     result = train(train_ds, val_ds, vocab_size, cfg)
     _save_result(result, results_dir)
-    return result
+    _save_plot(result, results_dir)
 
+
+    # ── send notification to iPhone ─────────────────────────────────────────
+    try:
+        send_imessage_to_email("satwikgvaidya@icloud.com", f"ML training completed for {cfg.operation}!")
+        print("📩 iMessage sent to email Apple ID.")
+    except Exception as e:
+        print(f"⚠️ Failed to send iMessage: {e}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
