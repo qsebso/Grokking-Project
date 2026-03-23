@@ -24,6 +24,10 @@ def op_sub(a, b, p):
     """x ∘ y = x - y (mod p)"""
     return (a - b) % p
 
+def op_mul(a, b, p):
+    """x ∘ y = x * y (mod p)"""
+    return (a * b) % p
+
 def op_div(a, b, p):
     """x ∘ y = x / y (mod p)  —  b must be nonzero (0 < b < p)"""
     return (a * pow(int(b), -1, p)) % p
@@ -97,13 +101,17 @@ def op_add_or_add_1_on_a_greater_than_b(a, b, p):
     else:
         return (a + 1) % p
 
+def op_add_1(a, b, p):
+    """x ∘ y = x + y + 1 (mod p)"""
+    return (a + b + 1) % p
+
 # goal is to see if 1 operation in a 2 rule set is better
 def op_add_or_nothing_on_a_greater_than_b(a, b, p):
     """x ∘ y = x + y (mod p) if x >= y, else x"""
     if a >= b:
         return (a + b) % p
     else:
-        return 0
+        return a
 
 def op_add_or_a_plus_1(a, b, p):
     """x ∘ y = x + y (mod p) if y is odd, else x + 1 (mod p)"""
@@ -118,6 +126,25 @@ def op_add_or_add5(a, b, p):
         return (a + b) % p
     else:
         return (a + 5*b) % p
+
+def op_mul5(a, b, p):
+    """x ∘ y = x * y * 5 (mod p)"""
+    return (a * b * 5) % p
+
+def op_mul5_plus_add(a, b, p):
+    """x ∘ y = x * y * 5 + y (mod p)"""
+    return (a + 5*b) % p
+
+def op_add_or_affine(a, b, p):
+    """x ∘ y = x + y (mod p) if y is odd, else 3x + 7y + 11 (mod p)"""
+    if b % 2 == 1:
+        return (a + b) % p
+    else:
+        return (3*a + 7*b + 11) % p
+
+def op_affine(a, b, p):
+    """x ∘ y = 3x + 7y + 11 (mod p)"""
+    return (3*a + 7*b + 11) % p
 
 def op_sq_sum(a, b, p):
     """x ∘ y = x^2 + y^2 (mod p)"""
@@ -183,6 +210,7 @@ OPERATIONS = {
     # ── integer mod-p ops ──────────────────────────────────────────────────
     "add":           (op_add,           False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sub":           (op_sub,           False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "mul":           (op_mul,           False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "div":           (op_div,           False, lambda p: [(a, b) for a in range(p) for b in range(1, p)]),
     "div_or_sub":    (op_div_or_sub,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_sub":    (op_add_or_sub,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
@@ -193,9 +221,14 @@ OPERATIONS = {
     "add_or_nothing": (op_add_or_nothing, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul_on_a_greater_than_b": (op_add_or_mul_on_a_greater_than_b, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add_1_on_a_greater_than_b": (op_add_or_add_1_on_a_greater_than_b, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_1":           (op_add_1,           False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_nothing_on_a_greater_than_b": (op_add_or_nothing_on_a_greater_than_b, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_a_plus_1": (op_add_or_a_plus_1, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add5": (op_add_or_add5, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_affine": (op_add_or_affine, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "affine":        (op_affine,        False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "mul5":          (op_mul5,          False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "mul5_plus_add": (op_mul5_plus_add, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sq_sum":        (op_sq_sum,        False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sq_sum_xy":     (op_sq_sum_xy,     False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sq_sum_xy_x":   (op_sq_sum_xy_x,  False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
