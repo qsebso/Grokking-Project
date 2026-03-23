@@ -165,6 +165,10 @@ def _save_result(result, results_dir: str):
             "log_epochs":   result.log_epochs,
             "train_accs":   result.train_accs,
             "val_accs":     result.val_accs,
+            "train_odd_accs": result.train_odd_accs,
+            "train_even_accs": result.train_even_accs,
+            "val_odd_accs": result.val_odd_accs,
+            "val_even_accs": result.val_even_accs,
             "train_losses": result.train_losses,
             "val_losses":   result.val_losses,
         }, f, indent=2)

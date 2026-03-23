@@ -12,6 +12,27 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
 
+def _get_b_token_column(x: torch.Tensor, input_format: str) -> torch.Tensor:
+    """
+    Return the tensor column corresponding to the `b` token for each input format.
+    """
+    if input_format == "a_op_b_eq":
+        return x[:, 2]
+    if input_format == "a_b_eq":
+        return x[:, 1]
+    if input_format == "a_op_b_eq_rule":
+        return x[:, 3]
+    raise ValueError(f"Unknown input_format: {input_format}")
+
+
+def _masked_acc(correct: torch.Tensor, mask: torch.Tensor) -> Optional[float]:
+    """Return masked mean accuracy, or None if mask is empty."""
+    n = int(mask.sum().item())
+    if n == 0:
+        return None
+    return correct[mask].float().mean().item()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
@@ -66,6 +87,10 @@ class TrainResult:
     log_epochs:     List[int]   = field(default_factory=list)
     train_accs:     List[float] = field(default_factory=list)
     val_accs:       List[float] = field(default_factory=list)
+    train_odd_accs: List[float] = field(default_factory=list)
+    train_even_accs: List[float] = field(default_factory=list)
+    val_odd_accs:   List[float] = field(default_factory=list)
+    val_even_accs:  List[float] = field(default_factory=list)
     train_losses:   List[float] = field(default_factory=list)
     val_losses:     List[float] = field(default_factory=list)
 
@@ -202,16 +227,39 @@ def train(
             model.eval()
             with torch.no_grad():
                 tr_logits  = model(x_train)
+                tr_preds   = tr_logits.argmax(-1)
                 tr_loss    = criterion(tr_logits, y_train).item()
-                tr_acc     = (tr_logits.argmax(-1) == y_train).float().mean().item()
+                tr_acc     = (tr_preds == y_train).float().mean().item()
 
                 val_logits = model(x_val)
+                val_preds  = val_logits.argmax(-1)
                 val_loss   = criterion(val_logits, y_val).item()
-                val_acc    = (val_logits.argmax(-1) == y_val).float().mean().item()
+                val_acc    = (val_preds == y_val).float().mean().item()
+
+                # Branch accuracies by parity of the `b` token.
+                tr_b = _get_b_token_column(x_train, cfg.input_format)
+                val_b = _get_b_token_column(x_val, cfg.input_format)
+
+                tr_odd_mask = (tr_b % 2 == 1)
+                tr_even_mask = (tr_b % 2 == 0)
+                val_odd_mask = (val_b % 2 == 1)
+                val_even_mask = (val_b % 2 == 0)
+
+                tr_correct = (tr_preds == y_train)
+                val_correct = (val_preds == y_val)
+
+                tr_odd_acc = _masked_acc(tr_correct, tr_odd_mask)
+                tr_even_acc = _masked_acc(tr_correct, tr_even_mask)
+                val_odd_acc = _masked_acc(val_correct, val_odd_mask)
+                val_even_acc = _masked_acc(val_correct, val_even_mask)
 
             result.log_epochs.append(epoch)
             result.train_accs.append(tr_acc)
             result.val_accs.append(val_acc)
+            result.train_odd_accs.append(tr_odd_acc)
+            result.train_even_accs.append(tr_even_acc)
+            result.val_odd_accs.append(val_odd_acc)
+            result.val_even_accs.append(val_even_acc)
             result.train_losses.append(tr_loss)
             result.val_losses.append(val_loss)
 
@@ -222,9 +270,14 @@ def train(
                 result.grok_epoch = epoch
 
             if cfg.verbose and epoch % (cfg.log_every * 10) == 0:
+                tr_odd_str = f"{tr_odd_acc:.3f}" if tr_odd_acc is not None else "n/a"
+                tr_even_str = f"{tr_even_acc:.3f}" if tr_even_acc is not None else "n/a"
+                val_odd_str = f"{val_odd_acc:.3f}" if val_odd_acc is not None else "n/a"
+                val_even_str = f"{val_even_acc:.3f}" if val_even_acc is not None else "n/a"
                 print(
                     f"  Epoch {epoch:5d} | "
-                    f"Train {tr_acc:.3f} | Val {val_acc:.3f} | "
+                    f"Train {tr_acc:.3f} (odd {tr_odd_str}, even {tr_even_str}) | "
+                    f"Val {val_acc:.3f} (odd {val_odd_str}, even {val_even_str}) | "
                     f"Loss {tr_loss:.4f} / {val_loss:.4f}"
                 )
 

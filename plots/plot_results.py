@@ -99,6 +99,16 @@ def plot_single(data: dict, out: str, show: bool):
     # ── accuracy ──────────────────────────────────────────────────────────
     ax1.plot(epochs, data["train_accs"],  label="Train Acc",  color="#3B82F6", lw=2)
     ax1.plot(epochs, data["val_accs"],    label="Val Acc",    color="#F97316", lw=2)
+    if "train_odd_accs" in data and "train_even_accs" in data:
+        ax1.plot(epochs, data["train_odd_accs"], label="Train Odd",  color="#3B82F6",
+                 lw=1.2, linestyle="--", alpha=0.8)
+        ax1.plot(epochs, data["train_even_accs"], label="Train Even", color="#3B82F6",
+                 lw=1.2, linestyle=":", alpha=0.8)
+    if "val_odd_accs" in data and "val_even_accs" in data:
+        ax1.plot(epochs, data["val_odd_accs"], label="Val Odd",  color="#F97316",
+                 lw=1.2, linestyle="--", alpha=0.8)
+        ax1.plot(epochs, data["val_even_accs"], label="Val Even", color="#F97316",
+                 lw=1.2, linestyle=":", alpha=0.8)
 
     _mark_grokking(ax1, cfg)
 
@@ -148,6 +158,12 @@ def plot_sweep(results: list[dict], sweep_param: str, metric: str,
             # faint train acc
             ax.plot(epochs, data["train_accs"],  color=color, lw=1,
                     linestyle="--", alpha=0.35)
+            # optional branch curves (faint) when present
+            if "val_odd_accs" in data and "val_even_accs" in data:
+                ax.plot(epochs, data["val_odd_accs"], color=color, lw=0.9,
+                        linestyle=":", alpha=0.25)
+                ax.plot(epochs, data["val_even_accs"], color=color, lw=0.9,
+                        linestyle="-.", alpha=0.25)
 
         # vertical line at grokking epoch
         grok = cfg.get("grok_epoch")
@@ -200,6 +216,16 @@ def plot_grid(results: list[dict], metric: str, out: str, show: bool):
         else:
             ax.plot(epochs, data["train_accs"],   label="Train", color="#3B82F6", lw=1.5)
             ax.plot(epochs, data["val_accs"],     label="Val",   color="#F97316", lw=1.5)
+            if "train_odd_accs" in data and "train_even_accs" in data:
+                ax.plot(epochs, data["train_odd_accs"], label="Train Odd", color="#3B82F6",
+                        lw=1.0, linestyle="--", alpha=0.75)
+                ax.plot(epochs, data["train_even_accs"], label="Train Even", color="#3B82F6",
+                        lw=1.0, linestyle=":", alpha=0.75)
+            if "val_odd_accs" in data and "val_even_accs" in data:
+                ax.plot(epochs, data["val_odd_accs"], label="Val Odd", color="#F97316",
+                        lw=1.0, linestyle="--", alpha=0.75)
+                ax.plot(epochs, data["val_even_accs"], label="Val Even", color="#F97316",
+                        lw=1.0, linestyle=":", alpha=0.75)
             ax.set_ylim(-0.05, 1.05)
 
         _mark_grokking(ax, cfg, fontsize=8)
