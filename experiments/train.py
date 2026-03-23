@@ -4,12 +4,25 @@ Training loop and metric tracking for grokking experiments.
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
+
+from data.dataset import resolve_branch_metric, branch_metric_labels
+
+
+def _get_a_token_column(x: torch.Tensor, input_format: str) -> torch.Tensor:
+    """Column index of the first operand `a` for each input format."""
+    if input_format == "a_op_b_eq":
+        return x[:, 0]
+    if input_format == "a_b_eq":
+        return x[:, 0]
+    if input_format == "a_op_b_eq_rule":
+        return x[:, 1]
+    raise ValueError(f"Unknown input_format: {input_format}")
 
 
 def _get_b_token_column(x: torch.Tensor, input_format: str) -> torch.Tensor:
@@ -23,6 +36,24 @@ def _get_b_token_column(x: torch.Tensor, input_format: str) -> torch.Tensor:
     if input_format == "a_op_b_eq_rule":
         return x[:, 3]
     raise ValueError(f"Unknown input_format: {input_format}")
+
+
+def _branch_masks(
+    x: torch.Tensor, input_format: str, branch_metric: str
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return (mask_first_branch, mask_second_branch) for the given split mode."""
+    a = _get_a_token_column(x, input_format)
+    b = _get_b_token_column(x, input_format)
+    if branch_metric == "b_parity":
+        return (b % 2 == 1), (b % 2 == 0)
+    if branch_metric == "a_ge_b":
+        return (a >= b), (a < b)
+    if branch_metric == "a_gt_b":
+        return (a > b), (a <= b)
+    raise ValueError(
+        f"Unknown branch_metric '{branch_metric}'. "
+        "Expected: b_parity, a_ge_b, a_gt_b"
+    )
 
 
 def _masked_acc(correct: torch.Tensor, mask: torch.Tensor) -> Optional[float]:
@@ -74,6 +105,8 @@ class TrainConfig:
     model_seed:     int   = 42
     device:         str   = "auto"          # "auto" | "cpu" | "cuda"
     verbose:        bool  = True
+    # Per-sample accuracy split: "auto" infers from operation (see data.dataset)
+    branch_metric:  str   = "auto"          # auto | b_parity | a_ge_b | a_gt_b
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,6 +132,10 @@ class TrainResult:
     grok_gap:       Optional[int] = None   # grok_epoch - memo_epoch (if both found)
 
     elapsed_sec:    float = 0.0
+    # Resolved split used for train_odd_accs / train_even_accs (names kept for JSON compat)
+    branch_metric:  str = "b_parity"
+    branch_label_1: str = "odd"
+    branch_label_2: str = "even"
 
     def summary(self) -> Dict[str, Any]:
         return {
@@ -111,6 +148,9 @@ class TrainResult:
             "lr":                self.config.lr,
             "d_model":           self.config.d_model,
             "num_layers":        self.config.num_layers,
+            "branch_metric":     self.branch_metric,
+            "branch_label_1":    self.branch_label_1,
+            "branch_label_2":    self.branch_label_2,
             "memo_epoch":        self.memo_epoch,
             "grok_epoch":        self.grok_epoch,
             "grok_gap":          self.grok_gap,
@@ -199,7 +239,13 @@ def train(
         full_batch = True
 
     # ── result container ──────────────────────────────────────────────────
+    resolved_bm = resolve_branch_metric(cfg.operation, cfg.branch_metric)
+    lb1, lb2 = branch_metric_labels(resolved_bm)
+
     result = TrainResult(config=cfg)
+    result.branch_metric = resolved_bm
+    result.branch_label_1 = lb1
+    result.branch_label_2 = lb2
     t0 = time.time()
 
     # ── training loop ─────────────────────────────────────────────────────
@@ -236,22 +282,17 @@ def train(
                 val_loss   = criterion(val_logits, y_val).item()
                 val_acc    = (val_preds == y_val).float().mean().item()
 
-                # Branch accuracies by parity of the `b` token.
-                tr_b = _get_b_token_column(x_train, cfg.input_format)
-                val_b = _get_b_token_column(x_val, cfg.input_format)
-
-                tr_odd_mask = (tr_b % 2 == 1)
-                tr_even_mask = (tr_b % 2 == 0)
-                val_odd_mask = (val_b % 2 == 1)
-                val_even_mask = (val_b % 2 == 0)
+                # Branch accuracies (odd/even lists = first vs second split branch)
+                tr_m1, tr_m2 = _branch_masks(x_train, cfg.input_format, resolved_bm)
+                val_m1, val_m2 = _branch_masks(x_val, cfg.input_format, resolved_bm)
 
                 tr_correct = (tr_preds == y_train)
                 val_correct = (val_preds == y_val)
 
-                tr_odd_acc = _masked_acc(tr_correct, tr_odd_mask)
-                tr_even_acc = _masked_acc(tr_correct, tr_even_mask)
-                val_odd_acc = _masked_acc(val_correct, val_odd_mask)
-                val_even_acc = _masked_acc(val_correct, val_even_mask)
+                tr_odd_acc = _masked_acc(tr_correct, tr_m1)
+                tr_even_acc = _masked_acc(tr_correct, tr_m2)
+                val_odd_acc = _masked_acc(val_correct, val_m1)
+                val_even_acc = _masked_acc(val_correct, val_m2)
 
             result.log_epochs.append(epoch)
             result.train_accs.append(tr_acc)
@@ -270,14 +311,14 @@ def train(
                 result.grok_epoch = epoch
 
             if cfg.verbose and epoch % (cfg.log_every * 10) == 0:
-                tr_odd_str = f"{tr_odd_acc:.3f}" if tr_odd_acc is not None else "n/a"
-                tr_even_str = f"{tr_even_acc:.3f}" if tr_even_acc is not None else "n/a"
-                val_odd_str = f"{val_odd_acc:.3f}" if val_odd_acc is not None else "n/a"
-                val_even_str = f"{val_even_acc:.3f}" if val_even_acc is not None else "n/a"
+                tr_s1 = f"{tr_odd_acc:.3f}" if tr_odd_acc is not None else "n/a"
+                tr_s2 = f"{tr_even_acc:.3f}" if tr_even_acc is not None else "n/a"
+                val_s1 = f"{val_odd_acc:.3f}" if val_odd_acc is not None else "n/a"
+                val_s2 = f"{val_even_acc:.3f}" if val_even_acc is not None else "n/a"
                 print(
                     f"  Epoch {epoch:5d} | "
-                    f"Train {tr_acc:.3f} (odd {tr_odd_str}, even {tr_even_str}) | "
-                    f"Val {val_acc:.3f} (odd {val_odd_str}, even {val_even_str}) | "
+                    f"Train {tr_acc:.3f} ({lb1} {tr_s1}, {lb2} {tr_s2}) | "
+                    f"Val {val_acc:.3f} ({lb1} {val_s1}, {lb2} {val_s2}) | "
                     f"Loss {tr_loss:.4f} / {val_loss:.4f}"
                 )
 

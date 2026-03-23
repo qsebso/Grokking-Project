@@ -28,7 +28,7 @@ import itertools
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from data.dataset      import make_dataset, OPERATIONS
+from data.dataset      import make_dataset, OPERATIONS, resolve_branch_metric, branch_metric_labels
 from experiments.train import TrainConfig, train
 
 
@@ -68,6 +68,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--num_epochs",   type=int,   default=5_000)
     p.add_argument("--batch_size",   type=int,   default=None)
     p.add_argument("--log_every",    type=int,   default=50)
+    p.add_argument(
+        "--branch_metric",
+        default="auto",
+        choices=["auto", "b_parity", "a_ge_b", "a_gt_b"],
+        help="Train/val branch accuracies: auto infers from operation (e.g. a>=b for add_or_mul_on_a_greater_than_b); "
+        "b_parity = odd/even b; a_ge_b / a_gt_b compare a vs b.",
+    )
 
     # ── sweep modes ───────────────────────────────────────────────────────
     p.add_argument("--sweep", nargs="+", default=None,
@@ -162,6 +169,9 @@ def _save_result(result, results_dir: str):
     with open(path, "w") as f:
         json.dump({
             "summary":      result.summary(),
+            "branch_metric":   result.branch_metric,
+            "branch_label_1":  result.branch_label_1,
+            "branch_label_2":  result.branch_label_2,
             "log_epochs":   result.log_epochs,
             "train_accs":   result.train_accs,
             "val_accs":     result.val_accs,
@@ -192,6 +202,9 @@ def run_one(cfg: TrainConfig, results_dir: str):
     print(f"  num_layers         = {cfg.num_layers}")
     print(f"  num_epochs         = {cfg.num_epochs}")
     print(f"  batch_size         = {cfg.batch_size if cfg.batch_size else 'full'}")
+    _bm = resolve_branch_metric(cfg.operation, cfg.branch_metric)
+    _l1, _l2 = branch_metric_labels(_bm)
+    print(f"  branch_metric      = {cfg.branch_metric}  ->  {_bm}  ({_l1} / {_l2})")
     print(f"{'='*60}")
 
     train_ds, val_ds, vocab_size = make_dataset(
@@ -269,6 +282,7 @@ def main():
         batch_size        = args.batch_size,
         log_every         = args.log_every,
         verbose           = not args.quiet,
+        branch_metric     = args.branch_metric,
     )
 
     # ── 2D grid ───────────────────────────────────────────────────────────

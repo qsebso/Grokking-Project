@@ -9,6 +9,7 @@ import random
 import itertools
 import torch
 from torch.utils.data import TensorDataset
+from typing import Tuple
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +64,60 @@ def op_add_or_mul(a, b, p):
         return (a + b) % p
     else:
         return (a * b) % p
+
+# goal is to see if adding 1 is better than multiplying
+def op_add_or_add_1(a, b, p):
+    """x ∘ y = x + y (mod p) if y is odd, else x + y + 1 (mod p)"""
+    if b % 2 == 1:
+        return (a + b) % p
+    else:
+        return (a + b + 1) % p
+
+# goal is to see if 1 operation in a 2 rule set is better
+def op_add_or_nothing(a, b, p):
+    """x ∘ y = x + y (mod p) if y is odd, else x"""
+    if b % 2 == 1:
+        return (a + b) % p
+    else:
+        return a
+
+# goal is to make a 2 rule set that is seperated in 1 line in the dataset instead of odd/even
+def op_add_or_mul_on_a_greater_than_b(a, b, p):
+    """x ∘ y = x + y (mod p) if x >= y, else x * y (mod p)"""
+    if a >= b:  
+        return (a + b) % p
+    else:
+        return (a * b) % p
+
+# goal is to see if adding 1 is better than multiplying
+def op_add_or_add_1_on_a_greater_than_b(a, b, p):
+    """x ∘ y = x + y (mod p) if x >= y, else x + y + 1 (mod p)"""
+    if a >= b:
+        return (a + b) % p
+    else:
+        return (a + 1) % p
+
+# goal is to see if 1 operation in a 2 rule set is better
+def op_add_or_nothing_on_a_greater_than_b(a, b, p):
+    """x ∘ y = x + y (mod p) if x >= y, else x"""
+    if a >= b:
+        return (a + b) % p
+    else:
+        return 0
+
+def op_add_or_a_plus_1(a, b, p):
+    """x ∘ y = x + y (mod p) if y is odd, else x + 1 (mod p)"""
+    if b % 2 == 1:
+        return (a + b) % p
+    else:
+        return (a + 1) % p
+
+def op_add_or_add5(a, b, p):
+    """x ∘ y = x + y (mod p) if y is odd, else x + 5y (mod p)"""
+    if b % 2 == 1:
+        return (a + b) % p
+    else:
+        return (a + 5*b) % p
 
 def op_sq_sum(a, b, p):
     """x ∘ y = x^2 + y^2 (mod p)"""
@@ -134,6 +189,13 @@ OPERATIONS = {
     "sub_or_add":    (op_sub_or_add,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add2":   (op_add_or_add2,   False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul":    (op_add_or_mul,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_add_1":  (op_add_or_add_1,  False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_nothing": (op_add_or_nothing, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_mul_on_a_greater_than_b": (op_add_or_mul_on_a_greater_than_b, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_add_1_on_a_greater_than_b": (op_add_or_add_1_on_a_greater_than_b, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_nothing_on_a_greater_than_b": (op_add_or_nothing_on_a_greater_than_b, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_a_plus_1": (op_add_or_a_plus_1, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_add5": (op_add_or_add5, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sq_sum":        (op_sq_sum,        False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sq_sum_xy":     (op_sq_sum_xy,     False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sq_sum_xy_x":   (op_sq_sum_xy_x,  False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
@@ -144,6 +206,37 @@ OPERATIONS = {
     "s5_conj":       (op_s5_conj,       True,  lambda p: [(a, b) for a in _all_S5() for b in _all_S5()]),
     "s5_sandwich":   (op_s5_sandwich,   True,  lambda p: [(a, b) for a in _all_S5() for b in _all_S5()]),
 }
+
+
+def resolve_branch_metric(operation: str, branch_metric_cfg: str) -> str:
+    """
+    How training should split per-sample accuracies (see experiments/train.py).
+
+    branch_metric_cfg:
+      "auto"     → infer from operation when known, else "b_parity"
+      "b_parity" → odd vs even second operand b
+      "a_ge_b"   → a >= b vs a < b
+      "a_gt_b"   → a > b vs a <= b
+    """
+    if branch_metric_cfg != "auto":
+        return branch_metric_cfg
+    if operation == "add_or_mul_on_a_greater_than_b":
+        return "a_ge_b"
+    return "b_parity"
+
+
+def branch_metric_labels(metric: str) -> Tuple[str, str]:
+    """Short labels for the two branches (first list → train_odd_accs / val_odd_accs slot)."""
+    if metric == "b_parity":
+        return ("odd", "even")
+    if metric == "a_ge_b":
+        return ("a>=b", "a<b")
+    if metric == "a_gt_b":
+        return ("a>b", "a<=b")
+    raise ValueError(
+        f"Unknown branch metric '{metric}'. "
+        "Use: auto, b_parity, a_ge_b, a_gt_b"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

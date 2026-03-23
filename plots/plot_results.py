@@ -52,6 +52,14 @@ def load_result(path: str) -> dict:
         return json.load(f)
 
 
+def _branch_plot_labels(data: dict) -> tuple[str, str, str, str]:
+    """Legend strings for the two branch accuracy curves (train/val × branch)."""
+    s = data.get("summary") or {}
+    b1 = data.get("branch_label_1") or s.get("branch_label_1") or "Odd"
+    b2 = data.get("branch_label_2") or s.get("branch_label_2") or "Even"
+    return (f"Train {b1}", f"Train {b2}", f"Val {b1}", f"Val {b2}")
+
+
 def find_results(patterns) -> list[str]:
     paths = []
     for pat in patterns:
@@ -99,15 +107,20 @@ def plot_single(data: dict, out: str, show: bool):
     # ── accuracy ──────────────────────────────────────────────────────────
     ax1.plot(epochs, data["train_accs"],  label="Train Acc",  color="#3B82F6", lw=2)
     ax1.plot(epochs, data["val_accs"],    label="Val Acc",    color="#F97316", lw=2)
-    if "train_odd_accs" in data and "train_even_accs" in data:
-        ax1.plot(epochs, data["train_odd_accs"], label="Train Odd",  color="#3B82F6",
+    if (
+        "train_odd_accs" in data
+        and "train_even_accs" in data
+        and "val_odd_accs" in data
+        and "val_even_accs" in data
+    ):
+        tl1, tl2, vl1, vl2 = _branch_plot_labels(data)
+        ax1.plot(epochs, data["train_odd_accs"], label=tl1,  color="#3B82F6",
                  lw=1.2, linestyle="--", alpha=0.8)
-        ax1.plot(epochs, data["train_even_accs"], label="Train Even", color="#3B82F6",
+        ax1.plot(epochs, data["train_even_accs"], label=tl2, color="#3B82F6",
                  lw=1.2, linestyle=":", alpha=0.8)
-    if "val_odd_accs" in data and "val_even_accs" in data:
-        ax1.plot(epochs, data["val_odd_accs"], label="Val Odd",  color="#F97316",
+        ax1.plot(epochs, data["val_odd_accs"], label=vl1,  color="#F97316",
                  lw=1.2, linestyle="--", alpha=0.8)
-        ax1.plot(epochs, data["val_even_accs"], label="Val Even", color="#F97316",
+        ax1.plot(epochs, data["val_even_accs"], label=vl2, color="#F97316",
                  lw=1.2, linestyle=":", alpha=0.8)
 
     _mark_grokking(ax1, cfg)
@@ -216,15 +229,20 @@ def plot_grid(results: list[dict], metric: str, out: str, show: bool):
         else:
             ax.plot(epochs, data["train_accs"],   label="Train", color="#3B82F6", lw=1.5)
             ax.plot(epochs, data["val_accs"],     label="Val",   color="#F97316", lw=1.5)
-            if "train_odd_accs" in data and "train_even_accs" in data:
-                ax.plot(epochs, data["train_odd_accs"], label="Train Odd", color="#3B82F6",
+            if (
+                "train_odd_accs" in data
+                and "train_even_accs" in data
+                and "val_odd_accs" in data
+                and "val_even_accs" in data
+            ):
+                tl1, tl2, vl1, vl2 = _branch_plot_labels(data)
+                ax.plot(epochs, data["train_odd_accs"], label=tl1, color="#3B82F6",
                         lw=1.0, linestyle="--", alpha=0.75)
-                ax.plot(epochs, data["train_even_accs"], label="Train Even", color="#3B82F6",
+                ax.plot(epochs, data["train_even_accs"], label=tl2, color="#3B82F6",
                         lw=1.0, linestyle=":", alpha=0.75)
-            if "val_odd_accs" in data and "val_even_accs" in data:
-                ax.plot(epochs, data["val_odd_accs"], label="Val Odd", color="#F97316",
+                ax.plot(epochs, data["val_odd_accs"], label=vl1, color="#F97316",
                         lw=1.0, linestyle="--", alpha=0.75)
-                ax.plot(epochs, data["val_even_accs"], label="Val Even", color="#F97316",
+                ax.plot(epochs, data["val_even_accs"], label=vl2, color="#F97316",
                         lw=1.0, linestyle=":", alpha=0.75)
             ax.set_ylim(-0.05, 1.05)
 
