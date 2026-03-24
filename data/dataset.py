@@ -69,6 +69,20 @@ def op_add_or_mul(a, b, p):
     else:
         return (a * b) % p
 
+def op_add_or_mul_symmetric_on_a_plus_b_is_even(a, b, p):
+    """x ∘ y = x + y (mod p) if a + b is even, else x * y (mod p)"""
+    if (a + b) % 2 == 0:
+        return (a * b) % p
+    else:
+        return (a + b) % p
+
+def op_add_or_mul_symmetric_on_a_minus_b_is_even(a, b, p):
+    """x ∘ y = x + y (mod p) if a - b is even, else x * y (mod p)"""
+    if (a - b) % 2 == 0:
+        return (a * b) % p
+    else:
+        return (a + b) % p
+
 # goal is to see if adding 1 is better than multiplying
 def op_add_or_add_1(a, b, p):
     """x ∘ y = x + y (mod p) if y is odd, else x + y + 1 (mod p)"""
@@ -217,6 +231,8 @@ OPERATIONS = {
     "sub_or_add":    (op_sub_or_add,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add2":   (op_add_or_add2,   False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul":    (op_add_or_mul,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_mul_symmetric_on_a_plus_b_is_even": (op_add_or_mul_symmetric_on_a_plus_b_is_even, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_mul_symmetric_on_a_minus_b_is_even": (op_add_or_mul_symmetric_on_a_minus_b_is_even, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add_1":  (op_add_or_add_1,  False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_nothing": (op_add_or_nothing, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul_on_a_greater_than_b": (op_add_or_mul_on_a_greater_than_b, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
