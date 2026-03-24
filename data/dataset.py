@@ -83,6 +83,73 @@ def op_add_or_mul_symmetric_on_a_minus_b_is_even(a, b, p):
     else:
         return (a + b) % p
 
+def op_3way_sub_add_mul(a, b, p):
+    """Branch on region = (a + b) mod 3: 0 -> add, 1 -> sub, 2 -> mul (all mod p)."""
+    region = (a + b) % 3
+    if region == 0:
+        return (a + b) % p
+    if region == 1:
+        return (a - b) % p
+    return (a * b) % p
+
+
+def op_3way_add_add_2_mul_mul(a, b, p):
+    """Branch on region = (a + b) mod 3: 0 -> add, 1 -> a+2b, 2 -> ab (all mod p)."""
+    region = (a + b) % 3
+    if region == 0:
+        return (a + b) % p
+    if region == 1:
+        return (a + (2 * b)) % p
+    return (a * b) % p
+
+def op_4way_sub_add_mul_mul2(a, b, p):
+    """Branch on region = (a + b) mod 4: 0 -> add, 1 -> sub, 2 -> mul, 3 -> 2*(a + b) (all mod p)."""
+    region = (a + b) % 4
+    if region == 0:
+        return (a + b) % p
+    if region == 1:
+        return (a - b) % p  
+    if region == 2:
+        return (a * b) % p
+    if region == 3:
+        return (2*(a + b)) % p
+
+def op_4way_add_add2mul_sub2mul(a, b, p):
+    """Branch on region = (a + b) mod 4: 0 -> add, 1 -> a+2b, 2 -> mul, 3 -> a - 2*b (all mod p)."""
+    region = (a + b) % 4
+    if region == 0:
+        return (a + b) % p
+    if region == 1:
+        return (a + (2 * b)) % p  
+    if region == 2:
+        return (a * b) % p
+    if region == 3:
+        return (a - (2 * b)) % p
+
+def op_4way_add_sub_mul_div(a, b, p):
+    """Branch on region = (a + b) mod 4: 0 -> add, 1 -> sub, 2 -> mul, 3 -> div (all mod p)."""
+    region = (a + b) % 4
+    if region == 0:
+        return (a + b) % p
+    if region == 1:
+        return (a - b) % p
+    if region == 2:
+        return (a * b) % p
+    if region == 3:
+        return (a * pow(int(b), -1, p)) % p
+
+def op_4way_all_affine(a, b, p):
+    """Branch on region = (a + b) mod 4: 0 -> a + b, 1 -> a - b, 2 -> a + 2b, 3 -> 2a + b (all mod p)."""
+    region = (a + b) % 4
+    if region == 0:
+        return (a + b) % p
+    if region == 1:
+        return (a - b) % p
+    if region == 2:
+        return (a + 2 * b) % p
+    return (2 * a + b) % p
+
+
 # goal is to see if adding 1 is better than multiplying
 def op_add_or_add_1(a, b, p):
     """x ∘ y = x + y (mod p) if y is odd, else x + y + 1 (mod p)"""
@@ -233,6 +300,12 @@ OPERATIONS = {
     "add_or_mul":    (op_add_or_mul,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul_symmetric_on_a_plus_b_is_even": (op_add_or_mul_symmetric_on_a_plus_b_is_even, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul_symmetric_on_a_minus_b_is_even": (op_add_or_mul_symmetric_on_a_minus_b_is_even, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "3way_sub_add_mul": (op_3way_sub_add_mul, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "3way_add_add_2_mul_mul": (op_3way_add_add_2_mul_mul, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "4way_sub_add_mul_mul2": (op_4way_sub_add_mul_mul2, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "4way_add_add2mul_sub2mul": (op_4way_add_add2mul_sub2mul, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "4way_add_sub_mul_div": (op_4way_add_sub_mul_div, False, lambda p: [(a, b) for a in range(p) for b in range(1, p)]),
+    "4way_all_affine": (op_4way_all_affine, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add_1":  (op_add_or_add_1,  False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_nothing": (op_add_or_nothing, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul_on_a_greater_than_b": (op_add_or_mul_on_a_greater_than_b, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
