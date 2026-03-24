@@ -70,14 +70,14 @@ def op_add_or_mul(a, b, p):
         return (a * b) % p
 
 def op_add_or_mul_symmetric_on_a_plus_b_is_even(a, b, p):
-    """x ∘ y = x + y (mod p) if a + b is even, else x * y (mod p)"""
+    """x ∘ y = x * y (mod p) if a + b is even, else x + y (mod p)"""
     if (a + b) % 2 == 0:
         return (a * b) % p
     else:
         return (a + b) % p
 
 def op_add_or_mul_symmetric_on_a_minus_b_is_even(a, b, p):
-    """x ∘ y = x + y (mod p) if a - b is even, else x * y (mod p)"""
+    """x ∘ y = x * y (mod p) if a - b is even, else x + y (mod p)"""
     if (a - b) % 2 == 0:
         return (a * b) % p
     else:
