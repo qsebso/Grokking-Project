@@ -8,6 +8,8 @@ Matches the architecture from Power et al. (2022):
   - Final token's representation projected to vocab logits
 """
 
+from typing import Optional
+
 import torch
 import torch.nn as nn
 
@@ -36,6 +38,7 @@ class TransformerModel(nn.Module):
         seq_len: int = 4,
         dim_feedforward: int = None,
         dropout: float = 0.0,
+        num_logits: Optional[int] = None,
     ):
         super().__init__()
 
@@ -52,7 +55,8 @@ class TransformerModel(nn.Module):
             batch_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.output_proj = nn.Linear(d_model, vocab_size)
+        out_dim = num_logits if num_logits is not None else vocab_size
+        self.output_proj = nn.Linear(d_model, out_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -62,7 +66,7 @@ class TransformerModel(nn.Module):
 
         Returns
         -------
-        logits : (batch, vocab_size)
+        logits : (batch, vocab_size) or (batch, num_logits) if num_logits was set
         """
         emb    = self.embedding(x)              # (batch, seq, d_model)
         out    = self.transformer(emb)           # (batch, seq, d_model)

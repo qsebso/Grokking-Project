@@ -9,7 +9,7 @@ import random
 import itertools
 import torch
 from torch.utils.data import TensorDataset
-from typing import Tuple
+from typing import Tuple, Optional
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -376,7 +376,76 @@ def _build_vocab_integer(p):
     return p, p + 1, p + 2
 
 
-def _encode_integer_pairs(pairs, op_fn, p, fmt: str = "a_op_b_eq"):
+def _require_label_mod(label_mod: int) -> int:
+    if label_mod < 2:
+        raise ValueError("label_mod must be an integer >= 2")
+    return label_mod
+
+
+def category_label_num_classes(label_mode: str, label_mod: int = 3) -> int:
+    """Number of classes for categorical targets (integer-domain experiments)."""
+    if label_mode in ("c_parity", "b_parity", "a_parity"):
+        return 2
+    if label_mode in ("c_mod3", "a_plus_b_mod3"):
+        return 3
+    if label_mode == "c_mod":
+        return _require_label_mod(label_mod)
+    if label_mode == "a_plus_b_mod":
+        return _require_label_mod(label_mod)
+    raise ValueError(
+        f"Unknown label_mode '{label_mode}'. "
+        "Use: c_parity, b_parity, a_parity, c_mod3, a_plus_b_mod3, "
+        "c_mod, a_plus_b_mod (last two need --label_mod k)"
+    )
+
+
+def compute_category_label(
+    label_mode: str,
+    a: int,
+    b: int,
+    c: int,
+    p: int,
+    label_mod: int = 3,
+) -> int:
+    """
+    Map (a, b, c) to a class index.
+
+    Modes ``c_mod`` / ``a_plus_b_mod`` use ``label_mod = k`` for **k** classes (e.g. k=11 -> hard
+    input statistic). For ``c_*``, the model must track true ``c``; for ``a_plus_b_*``, only inputs.
+
+    ``c_mod3`` / ``a_plus_b_mod3`` are fixed-3 aliases (same as ``label_mod=3``).
+    """
+    del p
+    if label_mode == "c_parity":
+        return c % 2
+    if label_mode == "b_parity":
+        return b % 2
+    if label_mode == "a_parity":
+        return a % 2
+    if label_mode == "c_mod3":
+        return c % 3
+    if label_mode == "a_plus_b_mod3":
+        return (a + b) % 3
+    if label_mode == "c_mod":
+        k = _require_label_mod(label_mod)
+        return c % k
+    if label_mode == "a_plus_b_mod":
+        k = _require_label_mod(label_mod)
+        return (a + b) % k
+    raise ValueError(
+        f"Unknown label_mode '{label_mode}'. "
+        "Use: c_parity, b_parity, a_parity, c_mod3, a_plus_b_mod3, c_mod, a_plus_b_mod"
+    )
+
+
+def _encode_integer_pairs(
+    pairs,
+    op_fn,
+    p,
+    fmt: str = "a_op_b_eq",
+    label_mode: Optional[str] = None,
+    label_mod: int = 3,
+):
     """
     Encode integer pairs into (input_seq, label) tensors.
 
@@ -421,7 +490,10 @@ def _encode_integer_pairs(pairs, op_fn, p, fmt: str = "a_op_b_eq"):
     for a, b in pairs:
         c = op_fn(a, b, p)
         xs.append(make_seq(a, b))
-        ys.append(c)
+        if label_mode is None:
+            ys.append(c)
+        else:
+            ys.append(compute_category_label(label_mode, a, b, c, p, label_mod))
     return (torch.tensor(xs, dtype=torch.long),
             torch.tensor(ys, dtype=torch.long),
             vocab_extra)
@@ -553,3 +625,69 @@ def make_dataset(
     return (TensorDataset(x_train, y_train),
             TensorDataset(x_val,   y_val),
             vocab_size)
+
+
+def make_category_dataset(
+    operation: str = "add",
+    p: int = 97,
+    train_frac: float = 0.5,
+    max_train_samples: int = None,
+    input_format: str = "a_op_b_eq",
+    seed: int = 42,
+    label_noise: float = 0.0,
+    label_mode: str = "c_parity",
+    label_mod: int = 3,
+):
+    """
+    Same token sequences as ``make_dataset``, but targets are categorical class indices.
+
+    ``label_mode`` (recommended first try: ``c_parity`` or ``c_mod`` with small ``label_mod``):
+      - **Output-based:** ``c_parity``, ``c_mod3``, ``c_mod`` (use ``label_mod=k`` for ``c % k``).
+      - **Input-based:** ``b_parity``, ``a_parity``, ``a_plus_b_mod3``, ``a_plus_b_mod``
+        (``a_plus_b_mod`` with large ``label_mod`` gives a high-cardinality input statistic).
+
+    Returns ``train_ds, val_ds, vocab_size, num_classes`` (``num_classes`` is the softmax size).
+    """
+    if operation not in OPERATIONS:
+        raise ValueError(
+            f"Unknown operation '{operation}'. "
+            f"Valid options: {sorted(OPERATIONS.keys())}"
+        )
+
+    op_fn, is_s5, domain_fn = OPERATIONS[operation]
+    if is_s5:
+        raise ValueError("make_category_dataset supports integer mod-p ops only (not S5).")
+
+    num_classes = category_label_num_classes(label_mode, label_mod)
+
+    all_pairs = domain_fn(p)
+    rng = random.Random(seed)
+    rng.shuffle(all_pairs)
+
+    n_train = int(len(all_pairs) * train_frac)
+    train_pairs = all_pairs[:n_train]
+    val_pairs = all_pairs[n_train:]
+
+    if max_train_samples is not None and max_train_samples < len(train_pairs):
+        train_pairs = train_pairs[:max_train_samples]
+
+    x_train, y_train, ve = _encode_integer_pairs(
+        train_pairs, op_fn, p, input_format, label_mode=label_mode, label_mod=label_mod
+    )
+    x_val, y_val, _ = _encode_integer_pairs(
+        val_pairs, op_fn, p, input_format, label_mode=label_mode, label_mod=label_mod
+    )
+    _, _, base_vocab = _build_vocab_integer(p)
+    vocab_size = base_vocab + ve
+
+    if label_noise > 0.0:
+        n_noisy = int(len(y_train) * label_noise)
+        noisy_idx = torch.randperm(len(y_train))[:n_noisy]
+        y_train[noisy_idx] = torch.randint(0, num_classes, (n_noisy,))
+
+    return (
+        TensorDataset(x_train, y_train),
+        TensorDataset(x_val, y_val),
+        vocab_size,
+        num_classes,
+    )

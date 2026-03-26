@@ -138,7 +138,7 @@ class TrainResult:
     branch_label_2: str = "even"
 
     def summary(self) -> Dict[str, Any]:
-        return {
+        out = {
             "operation":         self.config.operation,
             "p":                 self.config.p,
             "train_frac":        self.config.train_frac,
@@ -156,6 +156,16 @@ class TrainResult:
             "grok_gap":          self.grok_gap,
             "elapsed_sec":       round(self.elapsed_sec, 1),
         }
+        lm = getattr(self.config, "label_mode", None)
+        nc = getattr(self.config, "num_classes", None)
+        lmod = getattr(self.config, "label_mod", None)
+        if lm is not None:
+            out["label_mode"] = lm
+        if nc is not None:
+            out["num_classes"] = nc
+        if lmod is not None:
+            out["label_mod"] = lmod
+        return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
