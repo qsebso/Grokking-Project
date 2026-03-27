@@ -296,13 +296,25 @@ def make_dataset(
         vocab_size = base_vocab + ve
 
     # ── optional label noise on training set ───────────────────────────────
-    if label_noise > 0.0:
+    #This is for asymmetric noise
+    '''    if label_noise > 0.0:
         n_noisy = int(len(y_train) * label_noise)
         noisy_idx = torch.randperm(len(y_train))[:n_noisy]
         # corrupt only among valid answer tokens (0 .. p-1 or 0 .. 119)
         n_answers = vocab_size - 2 - ve
         y_train[noisy_idx] = torch.randint(0, n_answers, (n_noisy,))
-
+    '''
+    #This is for symetric noise
+    # In make_dataset(), replace the label_noise block with:
+    if label_noise > 0.0:
+        n_noisy = int(len(y_train) * label_noise)
+        # symmetric: swap pairs so noise is bidirectional
+        n_pairs = n_noisy // 2
+        idx = torch.randperm(len(y_train))[:n_pairs * 2]
+        idx_a, idx_b = idx[:n_pairs], idx[n_pairs:]
+        # swap labels between the two halves
+        y_train[idx_a], y_train[idx_b] = y_train[idx_b].clone(), y_train[idx_a].clone()
+    
     return (TensorDataset(x_train, y_train),
             TensorDataset(x_val,   y_val),
             vocab_size)
