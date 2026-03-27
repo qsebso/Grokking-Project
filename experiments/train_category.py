@@ -24,6 +24,7 @@ See ``data.dataset.make_category_dataset`` for all ``label_mode`` values.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
 import statistics
@@ -369,7 +370,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument(
         "--label_mod",
         type=int,
-        default=3,
+        default=0,
         help="Modulus k for c_mod / a_plus_b_mod (ignored for other modes). Try 3,5,7,11,...",
     )
     p.add_argument("--input_format", default="a_op_b_eq",
@@ -399,6 +400,10 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--sweep", nargs="+", default=None, metavar=("PARAM", "VAL"),
                    help="1D sweep: --sweep rule_count 1 2")
+    p.add_argument("--grid1", nargs="+", default=None, metavar=("PARAM", "VAL"),
+                   help="2D grid param 1: --grid1 weight_decay 0.0 1.0")
+    p.add_argument("--grid2", nargs="+", default=None, metavar=("PARAM", "VAL"),
+                   help="2D grid param 2: --grid2 rule_count 1 2")
     return p
 
 
@@ -446,6 +451,21 @@ def _run_one(cfg: TrainCategoryConfig, results_dir: str) -> TrainResult:
     return result
 
 
+def _print_2d_summary(p1: str, p2: str, results: List[TrainResult]) -> None:
+    print(f"\n{'─'*60}")
+    print(f"  GRID SUMMARY: {p1}  x  {p2}")
+    print(f"{'─'*60}")
+    for r in results:
+        v1 = getattr(r.config, p1)
+        v2 = getattr(r.config, p2)
+        print(
+            f"  {p1}={str(v1):<10}  {p2}={str(v2):<10}"
+            f"  memo={str(r.memo_epoch):<8}"
+            f"  grok={str(r.grok_epoch):<8}"
+            f"  gap={r.grok_gap}"
+        )
+
+
 if __name__ == "__main__":
     parser = _build_argparser()
     args = parser.parse_args()
@@ -469,7 +489,30 @@ if __name__ == "__main__":
         label_mod=args.label_mod,
         rule_count=args.rule_count,
     )
-    if args.sweep is not None:
+    # Same precedence as main.py: 2D grid → 1D sweep → single run
+    if args.grid1 is not None and args.grid2 is not None:
+        p1, vals1 = args.grid1[0], args.grid1[1:]
+        p2, vals2 = args.grid2[0], args.grid2[1:]
+        if len(vals1) == 0 or len(vals2) == 0:
+            parser.error("--grid1 and --grid2 each need a param name and at least one value.")
+
+        for param in (p1, p2):
+            if not hasattr(base_cfg, param):
+                parser.error(f"Unknown TrainCategoryConfig field: '{param}'")
+
+        total = len(vals1) * len(vals2)
+        print(f"\n[GRID] {p1} {vals1}  x  {p2} {vals2}  ->  {total} runs")
+
+        results_grid: List[TrainResult] = []
+        for v1, v2 in itertools.product(vals1, vals2):
+            cfg = TrainCategoryConfig(**vars(base_cfg))
+            setattr(cfg, p1, _cast(v1, getattr(base_cfg, p1)))
+            setattr(cfg, p2, _cast(v2, getattr(base_cfg, p2)))
+            results_grid.append(_run_one(cfg, args.results_dir))
+
+        _print_2d_summary(p1, p2, results_grid)
+
+    elif args.sweep is not None:
         if len(args.sweep) < 2:
             parser.error("--sweep requires PARAM VAL [VAL ...]")
         param = args.sweep[0]

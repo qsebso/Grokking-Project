@@ -48,6 +48,13 @@ def op_add_or_sub(a, b, p):
     else:
         return (a - b) % p
 
+def op_add_or_add(a, b, p):  # for continous to test if seperating groups in rules acts the same as continous if rules are the same
+    """x ∘ y = x + y (mod p) if y is odd, else x + y(mod p)"""
+    if b % 2 == 1:
+        return (a + b) % p
+    else:
+        return (a + b) % p
+
 def op_sub_or_add(a, b, p):
     """x ∘ y = x - y (mod p) if y is odd, else x + y (mod p)"""
     if b % 2 == 1:
@@ -336,6 +343,7 @@ OPERATIONS = {
     "div_or_sub":    (op_div_or_sub,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_sub":    (op_add_or_sub,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "sub_or_add":    (op_sub_or_add,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "add_or_add":    (op_add_or_add,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add2":   (op_add_or_add2,   False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul":    (op_add_or_mul,    False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul_symmetric_on_a_plus_b_is_even": (op_add_or_mul_symmetric_on_a_plus_b_is_even, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
@@ -420,6 +428,9 @@ OPERATION_RULE_INFO = {
     "add_or_mul": (2, _rid_b_odd_branch0),
     "add_or_sub": (2, _rid_b_odd_branch0),
     "sub_or_add": (2, _rid_b_odd_branch0),
+    # Same b-parity split as add_or_add2, but both branches return (a+b)%p —
+    # disjoint bands still separate identical outputs by branch for ablation.
+    "add_or_add": (2, _rid_b_odd_branch0),
     "add_or_add2": (2, _rid_b_odd_branch0),
     "div_or_sub": (3, _rid_div_or_sub),
     "add_or_mul_symmetric_on_a_plus_b_is_even": (2, _rid_sum_parity_mul_on_even),
