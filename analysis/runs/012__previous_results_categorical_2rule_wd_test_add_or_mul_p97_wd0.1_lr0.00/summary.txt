@@ -1,0 +1,24 @@
+Categorical task  ·  label_mode=c
+====================================================
+Source JSON (relative): !previous_results\categorical_2rule_wd_test\add_or_mul_p97_wd0.1_lr0.001_d128_l2_tf0.5_cat_c_rc2_ep5000.json
+Operation: add_or_mul   p=97   rule_count=2
+num_classes: 194   branch: b_parity
+  branches: odd / even
+
+Accuracy (overall)
+  Last logged epoch (5000):
+    train = 0.8728741407394409
+    val   = 0.2546227276325226
+  Mean over all log checkpoints:
+    train = 0.867227881848812
+    val   = 0.2524930882826448
+
+Branch accuracies (last log)
+  train odd = 0.8649219274520874
+  train even = 0.880942165851593
+  val   odd = 0.252295583486557
+  val   even = 0.2568238377571106
+
+Per-rule band summaries (see plots for every class)
+  macro mean over rules — train: 0.8738403092783505  val: 0.2553161340206186
+  micro mean over rules — train: 0.8729323596634979  val: 0.254559928986001

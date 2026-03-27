@@ -1,0 +1,24 @@
+Categorical task  ·  label_mode=c
+====================================================
+Source JSON (relative): !previous_results\category_add_or_add_weird\add_or_add_p97_wd1.0_lr0.001_d128_l2_tf0.5_cat_c_rc2_ep5000.json
+Operation: add_or_add   p=97   rule_count=2
+num_classes: 194   branch: b_parity
+  branches: odd / even
+
+Accuracy (overall)
+  Last logged epoch (5000):
+    train = 0.8728741407394409
+    val   = 0.6269925236701965
+  Mean over all log checkpoints:
+    train = 0.8652295818924904
+    val   = 0.4649798017553985
+
+Branch accuracies (last log)
+  train odd = 0.8666104078292847
+  train even = 0.8792291283607483
+  val   odd = 0.6187145113945007
+  val   even = 0.6348221898078918
+
+Per-rule band summaries (see plots for every class)
+  macro mean over rules — train: 0.872911237113402  val: 0.6337377835051546
+  micro mean over rules — train: 0.8729199982075759  val: 0.6267685437405943
