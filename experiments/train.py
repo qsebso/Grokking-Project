@@ -22,6 +22,10 @@ def _get_a_token_column(x: torch.Tensor, input_format: str) -> torch.Tensor:
         return x[:, 0]
     if input_format == "a_op_b_eq_rule":
         return x[:, 1]
+    if input_format == "a_op_b_eq_bparity":
+        return x[:, 0]
+    if input_format == "a_op_bparity_eq":
+        return x[:, 0]
     raise ValueError(f"Unknown input_format: {input_format}")
 
 
@@ -35,6 +39,10 @@ def _get_b_token_column(x: torch.Tensor, input_format: str) -> torch.Tensor:
         return x[:, 1]
     if input_format == "a_op_b_eq_rule":
         return x[:, 3]
+    if input_format == "a_op_b_eq_bparity":
+        return x[:, 2]
+    if input_format == "a_op_bparity_eq":
+        return x[:, 2]
     raise ValueError(f"Unknown input_format: {input_format}")
 
 
@@ -222,7 +230,15 @@ def train(
     #   "a_op_b_eq"       → 4 tokens
     #   "a_b_eq"          → 3 tokens
     #   "a_op_b_eq_rule"  → 5 tokens
-    _seq_len_map = {"a_op_b_eq": 4, "a_b_eq": 3, "a_op_b_eq_rule": 5}
+    #   "a_op_b_eq_bparity" → 5 tokens
+    #   "a_op_bparity_eq"   → 4 tokens
+    _seq_len_map = {
+        "a_op_b_eq": 4,
+        "a_b_eq": 3,
+        "a_op_b_eq_rule": 5,
+        "a_op_b_eq_bparity": 5,
+        "a_op_bparity_eq": 4,
+    }
     seq_len = _seq_len_map.get(cfg.input_format, 4)
 
     n_logits = cfg.num_logits if cfg.num_logits is not None else vocab_size

@@ -50,7 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max_train_samples", type=int, default=None,
                    help="Hard cap on training set size. Omit = no cap.")
     p.add_argument("--input_format", default="a_op_b_eq",
-                   choices=["a_op_b_eq", "a_b_eq", "a_op_b_eq_rule"])
+                   choices=[
+                       "a_op_b_eq",
+                       "a_b_eq",
+                       "a_op_b_eq_rule",
+                       "a_op_b_eq_bparity",
+                       "a_op_bparity_eq",
+                   ])
     p.add_argument("--label_noise",  type=float, default=0.0)
     p.add_argument("--data_seed",    type=int,   default=42)
     p.add_argument(

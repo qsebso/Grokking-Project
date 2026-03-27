@@ -631,6 +631,8 @@ def _encode_integer_pairs(
       "a_op_b_eq"  →  [a, op, b, =]          (default, matches the paper)
       "a_b_eq"     →  [a, b, =]               (no explicit operator token)
       "a_op_b_eq_rule" → [rule, a, op, b, =]  (prepend a rule-type token)
+      "a_op_b_eq_bparity" → [a, op, b, parity, =]  (parity = b mod 2 as token 0 or 1)
+      "a_op_bparity_eq"   → [a, op, parity, =]     (parity only; drops full b)
 
     For "a_op_b_eq_rule" the rule token is always vocab_size-1 (one extra
     token appended to the end of the vocabulary).
@@ -658,10 +660,23 @@ def _encode_integer_pairs(
         def make_seq(a, b):
             return [rule_tok, a, op_tok, b, eq_tok]
 
+    elif fmt == "a_op_b_eq_bparity":
+        # [a, op, b, b%2, =] — last token still "=" for last-position readout
+        vocab_extra = 0
+        def make_seq(a, b):
+            return [a, op_tok, b, b % 2, eq_tok]
+
+    elif fmt == "a_op_bparity_eq":
+        # [a, op, b%2, =] — no full b in the input
+        vocab_extra = 0
+        def make_seq(a, b):
+            return [a, op_tok, b % 2, eq_tok]
+
     else:
         raise ValueError(
             f"Unknown input_format '{fmt}'. "
-            "Choose from: 'a_op_b_eq', 'a_b_eq', 'a_op_b_eq_rule'"
+            "Choose from: 'a_op_b_eq', 'a_b_eq', 'a_op_b_eq_rule', "
+            "'a_op_b_eq_bparity', 'a_op_bparity_eq'"
         )
 
     xs, ys = [], []
@@ -711,6 +726,12 @@ def _encode_s5_pairs(pairs, op_fn, fmt: str = "a_op_b_eq"):
         def make_seq(ia, ib):
             return [rule_tok, ia, op_tok, ib, eq_tok]
 
+    elif fmt in ("a_op_b_eq_bparity", "a_op_bparity_eq"):
+        raise ValueError(
+            f"input_format {fmt!r} is not supported for S5 operations "
+            "(parity tokens would collide with permutation indices)."
+        )
+
     else:
         raise ValueError(
             f"Unknown input_format '{fmt}'. "
@@ -757,6 +778,8 @@ def make_dataset(
                            "a_op_b_eq"       → [a, op, b, =]   (paper default)
                            "a_b_eq"          → [a, b, =]        (no op token)
                            "a_op_b_eq_rule"  → [rule, a, op, b, =]
+                           "a_op_b_eq_bparity" → [a, op, b, b mod 2, =]
+                           "a_op_bparity_eq"   → [a, op, b mod 2, =]
     seed               : random seed for the train/val split
     label_noise        : fraction of *training* labels to randomly corrupt
     rule_count         : 1 = outputs in ``0..p-1`` (default).  ``n > 1`` must match the

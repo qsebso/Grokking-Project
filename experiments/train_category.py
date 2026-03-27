@@ -130,7 +130,13 @@ def train_category(
 
     torch.manual_seed(cfg.model_seed)
 
-    _seq_len_map = {"a_op_b_eq": 4, "a_b_eq": 3, "a_op_b_eq_rule": 5}
+    _seq_len_map = {
+        "a_op_b_eq": 4,
+        "a_b_eq": 3,
+        "a_op_b_eq_rule": 5,
+        "a_op_b_eq_bparity": 5,
+        "a_op_bparity_eq": 4,
+    }
     seq_len = _seq_len_map.get(cfg.input_format, 4)
 
     model = TransformerModel(
@@ -374,7 +380,13 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Modulus k for c_mod / a_plus_b_mod (ignored for other modes). Try 3,5,7,11,...",
     )
     p.add_argument("--input_format", default="a_op_b_eq",
-                   choices=["a_op_b_eq", "a_b_eq", "a_op_b_eq_rule"])
+                   choices=[
+                       "a_op_b_eq",
+                       "a_b_eq",
+                       "a_op_b_eq_rule",
+                       "a_op_b_eq_bparity",
+                       "a_op_bparity_eq",
+                   ])
     p.add_argument("--data_seed", type=int, default=42)
     p.add_argument("--label_noise", type=float, default=0.0)
     p.add_argument("--num_epochs", type=int, default=5000)
