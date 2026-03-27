@@ -9,6 +9,8 @@ Problem choice (label_mode)
   Often much easier and can memorize without grokking the binary op.
 - **a_plus_b_mod3** / **a_plus_b_mod** (with ``--label_mod k``): class is ``(a+b) % k``.  Large ``k``
   (e.g. 11, 17) makes a **high-cardinality** statistic from inputs only (harder memorization landscape).
+- **c**: class is the full true output ``c`` in ``0..p-1`` (``num_classes = p``) — same targets as
+  token prediction, but cross-entropy on class ids instead of ``p``-way vocab logits at the decoder.
 
 Use **c_parity** (2-way) or **c_mod** / **c_mod3** when the target should depend on the **true** ``c``.
 
@@ -22,11 +24,13 @@ See ``data.dataset.make_category_dataset`` for all ``label_mode`` values.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import statistics
 import sys
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -42,6 +46,54 @@ from experiments.train import (
     _branch_masks,
     _masked_acc,
 )
+
+
+def _per_class_accs_counts(
+    preds: torch.Tensor,
+    targets: torch.Tensor,
+    num_classes: int,
+) -> Tuple[List[Optional[float]], List[int]]:
+    """Per-class accuracy among samples with that label; count = support per class."""
+    correct = preds == targets
+    accs: List[Optional[float]] = []
+    counts: List[int] = []
+    for k in range(num_classes):
+        mask = targets == k
+        n = int(mask.sum().item())
+        counts.append(n)
+        if n == 0:
+            accs.append(None)
+        else:
+            accs.append(correct[mask].float().mean().item())
+    return accs, counts
+
+
+def _slash_class_pcts(
+    accs: List[Optional[float]],
+    counts: List[int],
+) -> str:
+    """``82/88/92/100`` = accuracies for class 0,1,2,… in percent (empty → —)."""
+    segs: List[str] = []
+    for a, n in zip(accs, counts):
+        if n == 0 or a is None:
+            segs.append("—")
+        else:
+            segs.append(f"{100.0 * a:.0f}")
+    return "/".join(segs)
+
+
+def _pct_or_dash(x: Optional[float]) -> str:
+    if x is None:
+        return "—"
+    return f"{100.0 * x:.0f}%"
+
+
+def _class_acc_summary(accs: List[Optional[float]]) -> str:
+    """min / median / max over classes that have support (percent)."""
+    xs = [100.0 * a for a in accs if a is not None]
+    if not xs:
+        return "—"
+    return f"min {min(xs):.0f}%  p50 {statistics.median(xs):.0f}%  max {max(xs):.0f}%"
 
 
 @dataclass
@@ -91,6 +143,10 @@ def train_category(
 
     if cfg.verbose:
         print(f"Parameters: {count_parameters(model):,}")
+        print(
+            "  Per-class accuracies: full tables align with log_epochs in saved JSON; "
+            "console shows slash detail only for K<=10, else min/p50/max."
+        )
 
     optimizer = optim.AdamW(
         model.parameters(),
@@ -160,6 +216,9 @@ def train_category(
                 val_odd_acc = _masked_acc(val_correct, val_m1)
                 val_even_acc = _masked_acc(val_correct, val_m2)
 
+                tr_cls_acc, tr_cls_n = _per_class_accs_counts(tr_preds, y_train, num_classes)
+                val_cls_acc, val_cls_n = _per_class_accs_counts(val_preds, y_val, num_classes)
+
             result.log_epochs.append(epoch)
             result.train_accs.append(tr_acc)
             result.val_accs.append(val_acc)
@@ -170,22 +229,45 @@ def train_category(
             result.train_losses.append(tr_loss)
             result.val_losses.append(val_loss)
 
+            row_tr = [None if a is None else round(float(a), 5) for a in tr_cls_acc]
+            row_val = [None if a is None else round(float(a), 5) for a in val_cls_acc]
+            result.per_class_train_accs.append(row_tr)
+            result.per_class_val_accs.append(row_val)
+            if not result.per_class_train_support:
+                result.per_class_train_support = list(tr_cls_n)
+                result.per_class_val_support = list(val_cls_n)
+
             if result.memo_epoch is None and tr_acc >= cfg.memo_train_threshold:
                 result.memo_epoch = epoch
             if result.grok_epoch is None and val_acc >= cfg.grok_val_threshold:
                 result.grok_epoch = epoch
 
             if cfg.verbose and epoch % (cfg.log_every * 10) == 0:
-                tr_s1 = f"{tr_odd_acc:.3f}" if tr_odd_acc is not None else "n/a"
-                tr_s2 = f"{tr_even_acc:.3f}" if tr_even_acc is not None else "n/a"
-                val_s1 = f"{val_odd_acc:.3f}" if val_odd_acc is not None else "n/a"
-                val_s2 = f"{val_even_acc:.3f}" if val_even_acc is not None else "n/a"
                 print(
                     f"  Epoch {epoch:5d} | "
-                    f"Train {tr_acc:.3f} ({lb1} {tr_s1}, {lb2} {tr_s2}) | "
-                    f"Val {val_acc:.3f} ({lb1} {val_s1}, {lb2} {val_s2}) | "
+                    f"Train {tr_acc:.3f} | Val {val_acc:.3f} | "
                     f"Loss {tr_loss:.4f} / {val_loss:.4f}"
                 )
+                print(
+                    f"      {resolved_bm}  tr {lb1}/{lb2} {_pct_or_dash(tr_odd_acc)}/"
+                    f"{_pct_or_dash(tr_even_acc)}  val {_pct_or_dash(val_odd_acc)}/"
+                    f"{_pct_or_dash(val_even_acc)}"
+                )
+                _max_slash_console = 10
+                if num_classes <= _max_slash_console:
+                    tr_sl = _slash_class_pcts(tr_cls_acc, tr_cls_n)
+                    val_sl = _slash_class_pcts(val_cls_acc, val_cls_n)
+                    print(
+                        f"      cls 0..{num_classes - 1} (%)  "
+                        f"tr {tr_sl}  |  val {val_sl}"
+                    )
+                else:
+                    print(
+                        f"      cls K={num_classes}  "
+                        f"tr {_class_acc_summary(tr_cls_acc)}  |  "
+                        f"val {_class_acc_summary(val_cls_acc)}  "
+                        f"(full per-class accs in JSON)"
+                    )
 
     if result.memo_epoch is not None and result.grok_epoch is not None:
         result.grok_gap = result.grok_epoch - result.memo_epoch
@@ -202,6 +284,65 @@ def train_category(
     return result
 
 
+def _category_fname_suffix(cfg: TrainCategoryConfig) -> str:
+    """Disambiguate runs: same stem as ``main._save_result`` + categorical marker."""
+    if cfg.label_mode in ("c_mod", "a_plus_b_mod"):
+        return f"_cat_{cfg.label_mode}_lm{cfg.label_mod}"
+    return f"_cat_{cfg.label_mode}"
+
+
+def save_category_result(result: TrainResult, results_dir: str) -> str:
+    """
+    Write JSON compatible with ``plots.plot_results`` / ``main._save_result`` schema,
+    filename = standard run stem + ``_cat_<label_mode>`` [``_lm<k>``] before ``_ep``.
+    Also writes ``per_class_train_accs`` / ``per_class_val_accs`` (rows aligned with
+    ``log_epochs``) and support counts when present.
+    """
+    os.makedirs(results_dir, exist_ok=True)
+    cfg = result.config
+    assert isinstance(cfg, TrainCategoryConfig)
+
+    mts = f"_n{cfg.max_train_samples}" if cfg.max_train_samples else ""
+    fmt = f"_fmt{cfg.input_format}" if cfg.input_format != "a_op_b_eq" else ""
+    fname = (
+        f"{cfg.operation}_p{cfg.p}"
+        f"_wd{cfg.weight_decay}"
+        f"_lr{cfg.lr}"
+        f"_d{cfg.d_model}"
+        f"_l{cfg.num_layers}"
+        f"_tf{cfg.train_frac}"
+        f"{mts}{fmt}"
+        f"{_category_fname_suffix(cfg)}"
+        f"_ep{cfg.num_epochs}.json"
+    )
+    path = os.path.join(results_dir, fname)
+    with open(path, "w", encoding="utf-8") as f:
+        payload = {
+            "task": "categorical",
+            "summary": result.summary(),
+            "branch_metric": result.branch_metric,
+            "branch_label_1": result.branch_label_1,
+            "branch_label_2": result.branch_label_2,
+            "log_epochs": result.log_epochs,
+            "train_accs": result.train_accs,
+            "val_accs": result.val_accs,
+            "train_odd_accs": result.train_odd_accs,
+            "train_even_accs": result.train_even_accs,
+            "val_odd_accs": result.val_odd_accs,
+            "val_even_accs": result.val_even_accs,
+            "train_losses": result.train_losses,
+            "val_losses": result.val_losses,
+        }
+        if result.per_class_train_support:
+            payload["per_class_train_support"] = result.per_class_train_support
+            payload["per_class_val_support"] = result.per_class_val_support
+        if result.per_class_train_accs:
+            payload["per_class_train_accs"] = result.per_class_train_accs
+            payload["per_class_val_accs"] = result.per_class_val_accs
+        json.dump(payload, f, indent=2)
+    return path
+
+
 def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Train with categorical labels (same transformer, different head size).",
@@ -211,6 +352,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--train_frac", type=float, default=0.5)
     p.add_argument("--label_mode", default="c_parity",
                    choices=[
+                       "c",
                        "c_parity",
                        "b_parity",
                        "a_parity",
@@ -238,6 +380,11 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--num_layers", type=int, default=2)
     p.add_argument("--branch_metric", default="auto",
                    choices=["auto", "b_parity", "a_ge_b", "a_gt_b"])
+    p.add_argument(
+        "--results_dir",
+        default="results",
+        help="Where to write JSON (same schema as main.py; filename includes _cat_<label_mode>).",
+    )
     p.add_argument("--quiet", action="store_true")
     return p
 
@@ -277,4 +424,7 @@ if __name__ == "__main__":
         f"train={len(train_ds):,}  val={len(val_ds):,}  vocab={vocab_size}  classes={num_classes}"
         + (f"  (label_mod={cfg.label_mod})" if cfg.label_mode in ("c_mod", "a_plus_b_mod") else "")
     )
-    train_category(train_ds, val_ds, vocab_size, num_classes, cfg)
+    result = train_category(train_ds, val_ds, vocab_size, num_classes, cfg)
+    out = save_category_result(result, args.results_dir)
+    if not args.quiet:
+        print(f"  -> saved to {out}")

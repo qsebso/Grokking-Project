@@ -127,6 +127,12 @@ class TrainResult:
     train_losses:   List[float] = field(default_factory=list)
     val_losses:     List[float] = field(default_factory=list)
 
+    # Optional (e.g. train_category): per log_epochs row, acc for class k or None if no support
+    per_class_train_accs:   List[List[Optional[float]]] = field(default_factory=list)
+    per_class_val_accs:     List[List[Optional[float]]] = field(default_factory=list)
+    per_class_train_support: List[int] = field(default_factory=list)  # counts; fixed for split
+    per_class_val_support:   List[int] = field(default_factory=list)
+
     memo_epoch:     Optional[int] = None   # first epoch with train_acc ≥ threshold
     grok_epoch:     Optional[int] = None   # first epoch with val_acc   ≥ threshold
     grok_gap:       Optional[int] = None   # grok_epoch - memo_epoch (if both found)

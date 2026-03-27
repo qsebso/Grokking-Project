@@ -60,6 +60,31 @@ def _branch_plot_labels(data: dict) -> tuple[str, str, str, str]:
     return (f"Train {b1}", f"Train {b2}", f"Val {b1}", f"Val {b2}")
 
 
+def _infer_task(data: dict, cfg: dict) -> str:
+    t = data.get("task")
+    if t:
+        return str(t)
+    if cfg.get("label_mode") is not None:
+        return "categorical"
+    return "regression"
+
+
+def _task_line(data: dict, cfg: dict | None = None) -> str:
+    """Experiment kind: task name, label_mode, num classes (and label_mod when relevant)."""
+    cfg = cfg if cfg is not None else (data.get("summary") or {})
+    parts: list[str] = [f"task={_infer_task(data, cfg)}"]
+    lm = cfg.get("label_mode")
+    if lm is not None:
+        parts.append(f"label={lm}")
+    nc = cfg.get("num_classes")
+    if nc is not None:
+        parts.append(f"classes={nc}")
+    lmod = cfg.get("label_mod")
+    if lm in ("c_mod", "a_plus_b_mod") and lmod is not None:
+        parts.append(f"label_mod={lmod}")
+    return "  |  ".join(parts)
+
+
 def find_results(patterns) -> list[str]:
     paths = []
     for pat in patterns:
@@ -127,7 +152,7 @@ def plot_single(data: dict, out: str, show: bool):
 
     ax1.set_xlabel("Epoch", fontsize=12)
     ax1.set_ylabel("Accuracy", fontsize=12)
-    ax1.set_title(_make_title(cfg, "Accuracy"), fontsize=13)
+    ax1.set_title(_make_title(cfg, "Accuracy", data), fontsize=12)
     ax1.legend(fontsize=11)
     ax1.set_ylim(-0.05, 1.05)
     ax1.grid(alpha=0.3)
@@ -138,7 +163,7 @@ def plot_single(data: dict, out: str, show: bool):
 
     ax2.set_xlabel("Epoch", fontsize=12)
     ax2.set_ylabel("Loss",  fontsize=12)
-    ax2.set_title(_make_title(cfg, "Loss"), fontsize=13)
+    ax2.set_title(_make_title(cfg, "Loss", data), fontsize=12)
     ax2.legend(fontsize=11)
     ax2.grid(alpha=0.3)
 
@@ -190,8 +215,10 @@ def plot_sweep(results: list[dict], sweep_param: str, metric: str,
     ax.set_title(
         f"Sweep: {sweep_param}  |  op={op}  |  "
         f"p={results[0]['summary'].get('p','?')}  |  "
-        f"train_frac={results[0]['summary'].get('train_frac','?')}",
-        fontsize=13,
+        f"train_frac={results[0]['summary'].get('train_frac','?')}\n"
+        f"{_task_line(results[0], results[0]['summary'])}  "
+        f"(from first run; legend = {sweep_param})",
+        fontsize=12,
     )
     ax.legend(fontsize=11)
     if metric == "acc":
@@ -248,7 +275,7 @@ def plot_grid(results: list[dict], metric: str, out: str, show: bool):
 
         _mark_grokking(ax, cfg, fontsize=8)
 
-        ax.set_title(_short_title(cfg), fontsize=9)
+        ax.set_title(_short_title(cfg, data), fontsize=8)
         ax.set_xlabel("Epoch", fontsize=8)
         ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
@@ -304,12 +331,14 @@ def _readable_name(cfg: dict) -> str:
     return f"{op} mod {p}  |  wd={wd}  lr={lr}  d={d}  train={int(float(tf)*100)}%  ep={ep}"
 
 
-def _make_title(cfg: dict, kind: str) -> str:
-    return f"{_readable_name(cfg)}\n{kind} over Training"
+def _make_title(cfg: dict, kind: str, data: dict | None = None) -> str:
+    data = data or {}
+    return f"{_readable_name(cfg)}\n{_task_line(data, cfg)}\n{kind} over Training"
 
 
-def _short_title(cfg: dict) -> str:
-    return _readable_name(cfg)
+def _short_title(cfg: dict, data: dict | None = None) -> str:
+    data = data or {}
+    return f"{_readable_name(cfg)}\n{_task_line(data, cfg)}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -350,9 +379,12 @@ def main():
     paths   = find_results(args.files if args.files else [])
     results = [load_result(path) for path in paths]
     print(f"Loaded {len(results)} result(s):")
-    for path in paths:
-        s = load_result(path)["summary"]
-        print(f"  {Path(path).name}  →  memo={s['memo_epoch']}  grok={s['grok_epoch']}  gap={s['grok_gap']}")
+    for path, res in zip(paths, results):
+        s = res["summary"]
+        print(
+            f"  {Path(path).name}  →  memo={s['memo_epoch']}  grok={s['grok_epoch']}  "
+            f"gap={s['grok_gap']}  |  {_task_line(res, s)}"
+        )
 
     # ── mode ──────────────────────────────────────────────────────────────
     mode = args.mode or auto_mode(len(results))

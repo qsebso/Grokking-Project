@@ -423,8 +423,10 @@ def _require_label_mod(label_mod: int) -> int:
     return label_mod
 
 
-def category_label_num_classes(label_mode: str, label_mod: int = 3) -> int:
+def category_label_num_classes(label_mode: str, label_mod: int = 3, *, p: int) -> int:
     """Number of classes for categorical targets (integer-domain experiments)."""
+    if label_mode == "c":
+        return p
     if label_mode in ("c_parity", "b_parity", "a_parity"):
         return 2
     if label_mode in ("c_mod3", "a_plus_b_mod3"):
@@ -435,8 +437,8 @@ def category_label_num_classes(label_mode: str, label_mod: int = 3) -> int:
         return _require_label_mod(label_mod)
     raise ValueError(
         f"Unknown label_mode '{label_mode}'. "
-        "Use: c_parity, b_parity, a_parity, c_mod3, a_plus_b_mod3, "
-        "c_mod, a_plus_b_mod (last two need --label_mod k)"
+        "Use: c, c_parity, b_parity, a_parity, c_mod3, a_plus_b_mod3, "
+        "c_mod, a_plus_b_mod (c_mod / a_plus_b_mod need --label_mod k)"
     )
 
 
@@ -455,7 +457,11 @@ def compute_category_label(
     input statistic). For ``c_*``, the model must track true ``c``; for ``a_plus_b_*``, only inputs.
 
     ``c_mod3`` / ``a_plus_b_mod3`` are fixed-3 aliases (same as ``label_mod=3``).
+
+    ``c`` uses the full output ``c`` in ``0 .. p-1`` as the class id (``num_classes = p``).
     """
+    if label_mode == "c":
+        return c
     del p
     if label_mode == "c_parity":
         return c % 2
@@ -475,7 +481,7 @@ def compute_category_label(
         return (a + b) % k
     raise ValueError(
         f"Unknown label_mode '{label_mode}'. "
-        "Use: c_parity, b_parity, a_parity, c_mod3, a_plus_b_mod3, c_mod, a_plus_b_mod"
+        "Use: c, c_parity, b_parity, a_parity, c_mod3, a_plus_b_mod3, c_mod, a_plus_b_mod"
     )
 
 
@@ -683,7 +689,8 @@ def make_category_dataset(
     Same token sequences as ``make_dataset``, but targets are categorical class indices.
 
     ``label_mode`` (recommended first try: ``c_parity`` or ``c_mod`` with small ``label_mod``):
-      - **Output-based:** ``c_parity``, ``c_mod3``, ``c_mod`` (use ``label_mod=k`` for ``c % k``).
+      - **Output-based:** ``c`` (full ``c`` in ``0..p-1``, ``num_classes=p``), ``c_parity``,
+        ``c_mod3``, ``c_mod`` (use ``label_mod=k`` for ``c % k``).
       - **Input-based:** ``b_parity``, ``a_parity``, ``a_plus_b_mod3``, ``a_plus_b_mod``
         (``a_plus_b_mod`` with large ``label_mod`` gives a high-cardinality input statistic).
 
@@ -699,7 +706,7 @@ def make_category_dataset(
     if is_s5:
         raise ValueError("make_category_dataset supports integer mod-p ops only (not S5).")
 
-    num_classes = category_label_num_classes(label_mode, label_mod)
+    num_classes = category_label_num_classes(label_mode, label_mod, p=p)
 
     all_pairs = domain_fn(p)
     rng = random.Random(seed)
