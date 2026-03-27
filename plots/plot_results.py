@@ -82,6 +82,9 @@ def _task_line(data: dict, cfg: dict | None = None) -> str:
     lmod = cfg.get("label_mod")
     if lm in ("c_mod", "a_plus_b_mod") and lmod is not None:
         parts.append(f"label_mod={lmod}")
+    rc = cfg.get("rule_count", 1)
+    if isinstance(rc, int) and rc > 1:
+        parts.append(f"rule_count={rc}")
     return "  |  ".join(parts)
 
 

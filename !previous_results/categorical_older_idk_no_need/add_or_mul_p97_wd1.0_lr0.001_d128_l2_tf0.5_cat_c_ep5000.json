@@ -16,10 +16,11 @@
     "memo_epoch": null,
     "grok_epoch": null,
     "grok_gap": null,
-    "elapsed_sec": 109.8,
+    "elapsed_sec": 110.4,
     "label_mode": "c",
     "num_classes": 97,
-    "label_mod": 3
+    "label_mod": 3,
+    "rule_count": 1
   },
   "branch_metric": "b_parity",
   "branch_label_1": "odd",

@@ -107,6 +107,9 @@ class TrainConfig:
     verbose:        bool  = True
     # Per-sample accuracy split: "auto" infers from operation (see data.dataset)
     branch_metric:  str   = "auto"          # auto | b_parity | a_ge_b | a_gt_b
+    # Disjoint multi-rule targets (see data.dataset.make_dataset); softmax width if set
+    rule_count:     int   = 1
+    num_logits:     Optional[int] = None    # None → use vocab_size in train()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -171,6 +174,7 @@ class TrainResult:
             out["num_classes"] = nc
         if lmod is not None:
             out["label_mod"] = lmod
+        out["rule_count"] = getattr(self.config, "rule_count", 1)
         return out
 
 
@@ -221,6 +225,7 @@ def train(
     _seq_len_map = {"a_op_b_eq": 4, "a_b_eq": 3, "a_op_b_eq_rule": 5}
     seq_len = _seq_len_map.get(cfg.input_format, 4)
 
+    n_logits = cfg.num_logits if cfg.num_logits is not None else vocab_size
     model = TransformerModel(
         vocab_size=vocab_size,
         d_model=cfg.d_model,
@@ -228,6 +233,7 @@ def train(
         num_layers=cfg.num_layers,
         dim_feedforward=cfg.dim_feedforward,
         seq_len=seq_len,
+        num_logits=n_logits,
     ).to(device)
 
     if cfg.verbose:

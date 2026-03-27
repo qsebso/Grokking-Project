@@ -190,3 +190,46 @@ But your model says:
 
 I don’t fully know the rule,
 but I can guess parity pretty well from patterns in (a,b)
+
+
+
+It’s not useless. It’s actually one of the more useful results you’ve gotten, because it separates “the model can learn exact modular outputs categorically” from “the model can handle a mixed rule.”
+
+What you’ve shown so far is:
+
+add groks in c mode
+so categorical exact-output prediction is a legit setup, not a broken one
+add_or_mul does not behave the same way in c mode
+so the problem is the two-rule structure, not just output format
+
+That is a real finding.
+
+
+What your experiment now says
+
+You’ve now shown three important things:
+
+1. add with exact categorical output can memorize and grok
+
+So categorical exact-output learning works.
+
+2. add_or_mul with exact categorical output does not memorize
+
+So the failure is not caused by compression like mod 2.
+
+3. add_or_mul still does not memorize even after removing overlap
+
+So the issue is not label collision. It is the mixed-rule structure itself.
+
+That’s actually a clean finding.
+
+Blunt interpretation
+
+Your current two-rule problem is probably just too hard for this model/setup in the exact-output regime.
+
+Not impossible in principle. Just too hard under:
+
+this capacity
+this optimization
+this weight decay
+this representation

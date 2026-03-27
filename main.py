@@ -53,6 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["a_op_b_eq", "a_b_eq", "a_op_b_eq_rule"])
     p.add_argument("--label_noise",  type=float, default=0.0)
     p.add_argument("--data_seed",    type=int,   default=42)
+    p.add_argument(
+        "--rule_count",
+        type=int,
+        default=1,
+        help="1: targets in 0..p-1. n>1: disjoint bands i*p..(i+1)p-1 per branch; "
+        "n must equal the op's branch count (e.g. add_or_mul→2, 3way→3). See data.dataset.OPERATION_RULE_INFO.",
+    )
 
     # ── model ─────────────────────────────────────────────────────────────
     p.add_argument("--d_model",      type=int,   default=128)
@@ -155,6 +162,7 @@ def _save_result(result, results_dir: str):
     cfg   = result.config
     mts   = f"_n{cfg.max_train_samples}" if cfg.max_train_samples else ""
     fmt   = f"_fmt{cfg.input_format}"    if cfg.input_format != "a_op_b_eq" else ""
+    rc    = f"_rc{cfg.rule_count}" if getattr(cfg, "rule_count", 1) > 1 else ""
     fname = (
         f"{cfg.operation}_p{cfg.p}"
         f"_wd{cfg.weight_decay}"
@@ -162,7 +170,7 @@ def _save_result(result, results_dir: str):
         f"_d{cfg.d_model}"
         f"_l{cfg.num_layers}"
         f"_tf{cfg.train_frac}"
-        f"{mts}{fmt}"
+        f"{mts}{fmt}{rc}"
         f"_ep{cfg.num_epochs}.json"
     )
     path = os.path.join(results_dir, fname)
@@ -205,9 +213,10 @@ def run_one(cfg: TrainConfig, results_dir: str):
     _bm = resolve_branch_metric(cfg.operation, cfg.branch_metric)
     _l1, _l2 = branch_metric_labels(_bm)
     print(f"  branch_metric      = {cfg.branch_metric}  ->  {_bm}  ({_l1} / {_l2})")
+    print(f"  rule_count         = {cfg.rule_count}")
     print(f"{'='*60}")
 
-    train_ds, val_ds, vocab_size = make_dataset(
+    train_ds, val_ds, vocab_size, num_logits = make_dataset(
         operation         = cfg.operation,
         p                 = cfg.p,
         train_frac        = cfg.train_frac,
@@ -215,8 +224,11 @@ def run_one(cfg: TrainConfig, results_dir: str):
         input_format      = cfg.input_format,
         seed              = cfg.data_seed,
         label_noise       = cfg.label_noise,
+        rule_count        = cfg.rule_count,
     )
-    print(f"  train={len(train_ds):,}  val={len(val_ds):,}  vocab={vocab_size}")
+    cfg.num_logits = num_logits
+    nl = num_logits if num_logits is not None else vocab_size
+    print(f"  train={len(train_ds):,}  val={len(val_ds):,}  vocab={vocab_size}  softmax={nl}")
 
     result = train(train_ds, val_ds, vocab_size, cfg)
     _save_result(result, results_dir)
@@ -283,6 +295,8 @@ def main():
         log_every         = args.log_every,
         verbose           = not args.quiet,
         branch_metric     = args.branch_metric,
+        rule_count        = args.rule_count,
+        num_logits        = None,
     )
 
     # ── 2D grid ───────────────────────────────────────────────────────────

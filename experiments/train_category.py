@@ -124,7 +124,8 @@ def train_category(
     if cfg.verbose:
         print(f"Device: {device}")
         extra = f"  label_mod={cfg.label_mod}" if cfg.label_mode in ("c_mod", "a_plus_b_mod") else ""
-        print(f"Categorical task: label_mode={cfg.label_mode}{extra}  num_classes={num_classes}")
+        rc_extra = f"  rule_count={cfg.rule_count} (disjoint bands)" if cfg.rule_count > 1 else ""
+        print(f"Categorical task: label_mode={cfg.label_mode}{extra}{rc_extra}  num_classes={num_classes}")
 
     torch.manual_seed(cfg.model_seed)
 
@@ -287,8 +288,12 @@ def train_category(
 def _category_fname_suffix(cfg: TrainCategoryConfig) -> str:
     """Disambiguate runs: same stem as ``main._save_result`` + categorical marker."""
     if cfg.label_mode in ("c_mod", "a_plus_b_mod"):
-        return f"_cat_{cfg.label_mode}_lm{cfg.label_mod}"
-    return f"_cat_{cfg.label_mode}"
+        body = f"_cat_{cfg.label_mode}_lm{cfg.label_mod}"
+    else:
+        body = f"_cat_{cfg.label_mode}"
+    if getattr(cfg, "rule_count", 1) > 1:
+        body += f"_rc{cfg.rule_count}"
+    return body
 
 
 def save_category_result(result: TrainResult, results_dir: str) -> str:
@@ -381,17 +386,70 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--branch_metric", default="auto",
                    choices=["auto", "b_parity", "a_ge_b", "a_gt_b"])
     p.add_argument(
+        "--rule_count",
+        type=int,
+        default=1,
+        help="Disjoint output bands (see data.dataset.make_dataset / OPERATION_RULE_INFO).",
+    )
+    p.add_argument(
         "--results_dir",
         default="results",
         help="Where to write JSON (same schema as main.py; filename includes _cat_<label_mode>).",
     )
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--sweep", nargs="+", default=None, metavar=("PARAM", "VAL"),
+                   help="1D sweep: --sweep rule_count 1 2")
     return p
 
 
+def _cast(value: str, default):
+    """Cast CLI sweep string values using existing field type."""
+    if isinstance(default, bool):
+        return value.lower() in ("true", "1", "yes")
+    if isinstance(default, int):
+        return int(value)
+    if isinstance(default, float):
+        return float(value)
+    if default is None:
+        try:
+            return int(value)
+        except ValueError:
+            pass
+        try:
+            return float(value)
+        except ValueError:
+            pass
+    return value
+
+
+def _run_one(cfg: TrainCategoryConfig, results_dir: str) -> TrainResult:
+    train_ds, val_ds, vocab_size, num_classes = make_category_dataset(
+        operation=cfg.operation,
+        p=cfg.p,
+        train_frac=cfg.train_frac,
+        input_format=cfg.input_format,
+        seed=cfg.data_seed,
+        label_noise=cfg.label_noise,
+        label_mode=cfg.label_mode,
+        label_mod=cfg.label_mod,
+        rule_count=cfg.rule_count,
+    )
+    print(
+        f"train={len(train_ds):,}  val={len(val_ds):,}  vocab={vocab_size}  classes={num_classes}"
+        + (f"  (label_mod={cfg.label_mod})" if cfg.label_mode in ("c_mod", "a_plus_b_mod") else "")
+        + (f"  rule_count={cfg.rule_count}" if cfg.rule_count > 1 else "")
+    )
+    result = train_category(train_ds, val_ds, vocab_size, num_classes, cfg)
+    out = save_category_result(result, results_dir)
+    if cfg.verbose:
+        print(f"  -> saved to {out}")
+    return result
+
+
 if __name__ == "__main__":
-    args = _build_argparser().parse_args()
-    cfg = TrainCategoryConfig(
+    parser = _build_argparser()
+    args = parser.parse_args()
+    base_cfg = TrainCategoryConfig(
         operation=args.operation,
         p=args.p,
         train_frac=args.train_frac,
@@ -409,22 +467,32 @@ if __name__ == "__main__":
         verbose=not args.quiet,
         label_mode=args.label_mode,
         label_mod=args.label_mod,
+        rule_count=args.rule_count,
     )
-    train_ds, val_ds, vocab_size, num_classes = make_category_dataset(
-        operation=cfg.operation,
-        p=cfg.p,
-        train_frac=cfg.train_frac,
-        input_format=cfg.input_format,
-        seed=cfg.data_seed,
-        label_noise=cfg.label_noise,
-        label_mode=cfg.label_mode,
-        label_mod=cfg.label_mod,
-    )
-    print(
-        f"train={len(train_ds):,}  val={len(val_ds):,}  vocab={vocab_size}  classes={num_classes}"
-        + (f"  (label_mod={cfg.label_mod})" if cfg.label_mode in ("c_mod", "a_plus_b_mod") else "")
-    )
-    result = train_category(train_ds, val_ds, vocab_size, num_classes, cfg)
-    out = save_category_result(result, args.results_dir)
-    if not args.quiet:
-        print(f"  -> saved to {out}")
+    if args.sweep is not None:
+        if len(args.sweep) < 2:
+            parser.error("--sweep requires PARAM VAL [VAL ...]")
+        param = args.sweep[0]
+        values = args.sweep[1:]
+        if not hasattr(base_cfg, param):
+            parser.error(f"Unknown TrainCategoryConfig field: '{param}'")
+
+        print(f"\n[SWEEP] {param} in {values}")
+        results: List[TrainResult] = []
+        for v in values:
+            cfg = TrainCategoryConfig(**vars(base_cfg))
+            setattr(cfg, param, _cast(v, getattr(base_cfg, param)))
+            results.append(_run_one(cfg, args.results_dir))
+
+        print(f"\n{'─'*60}")
+        print(f"  SWEEP SUMMARY: {param}")
+        print(f"{'─'*60}")
+        for r in results:
+            print(
+                f"  {param}={str(getattr(r.config, param)):<12}"
+                f"  memo={str(r.memo_epoch):<8}"
+                f"  grok={str(r.grok_epoch):<8}"
+                f"  gap={r.grok_gap}"
+            )
+    else:
+        _run_one(base_cfg, args.results_dir)

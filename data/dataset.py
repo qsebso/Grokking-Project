@@ -370,6 +370,117 @@ OPERATIONS = {
     "s5_sandwich":   (op_s5_sandwich,   True,  lambda p: [(a, b) for a in _all_S5() for b in _all_S5()]),
 }
 
+# ── Multi-rule ops: (num_branches, rule_id(a,b,p)) for disjoint output ranges ─────────
+# rule_id in 0..num_branches-1; encoded label = rule_id * p + (c mod p) when rule_count > 1.
+
+
+def _rid_b_odd_branch0(a: int, b: int, p: int) -> int:
+    del a, p
+    return 1 - (b & 1)
+
+
+def _rid_a_ge_b_branch0(a: int, b: int, p: int) -> int:
+    del p
+    return 0 if a >= b else 1
+
+
+def _rid_a_gt_b_branch0(a: int, b: int, p: int) -> int:
+    del p
+    return 0 if a > b else 1
+
+
+def _rid_sum_mod_m(m: int):
+    def inner(a: int, b: int, p: int) -> int:
+        del p
+        return (a + b) % m
+
+    return inner
+
+
+def _rid_sum_parity_mul_on_even(a: int, b: int, p: int) -> int:
+    del p
+    return (a + b) % 2
+
+
+def _rid_diff_parity_mul_on_even(a: int, b: int, p: int) -> int:
+    del p
+    return (a - b) % 2
+
+
+def _rid_div_or_sub(a: int, b: int, p: int) -> int:
+    del a, p
+    if b == 0:
+        return 0
+    if b % 2 == 1:
+        return 1
+    return 2
+
+
+OPERATION_RULE_INFO = {
+    "add_or_mul": (2, _rid_b_odd_branch0),
+    "add_or_sub": (2, _rid_b_odd_branch0),
+    "sub_or_add": (2, _rid_b_odd_branch0),
+    "add_or_add2": (2, _rid_b_odd_branch0),
+    "div_or_sub": (3, _rid_div_or_sub),
+    "add_or_mul_symmetric_on_a_plus_b_is_even": (2, _rid_sum_parity_mul_on_even),
+    "add_or_mul_symmetric_on_a_minus_b_is_even": (2, _rid_diff_parity_mul_on_even),
+    "add_or_mul_on_a_greater_than_b": (2, _rid_a_ge_b_branch0),
+    "add_or_add_1_on_a_greater_than_b": (2, _rid_a_ge_b_branch0),
+    "add_or_nothing_on_a_greater_than_b": (2, _rid_a_ge_b_branch0),
+    "add_or_add_1": (2, _rid_b_odd_branch0),
+    "add_or_nothing": (2, _rid_b_odd_branch0),
+    "add_or_a_plus_1": (2, _rid_b_odd_branch0),
+    "add_or_add5": (2, _rid_b_odd_branch0),
+    "add_or_affine": (2, _rid_b_odd_branch0),
+    "3way_sub_add_mul": (3, _rid_sum_mod_m(3)),
+    "3way_add_add_2_mul_mul": (3, _rid_sum_mod_m(3)),
+    "4way_sub_add_mul_mul2": (4, _rid_sum_mod_m(4)),
+    "4way_add_add2mul_sub2mul": (4, _rid_sum_mod_m(4)),
+    "4way_add_sub_mul_div": (4, _rid_sum_mod_m(4)),
+    "4way_all_affine": (4, _rid_sum_mod_m(4)),
+    "10way_mixed_hard": (10, _rid_sum_mod_m(10)),
+}
+
+
+def operation_num_rules(operation: str) -> int:
+    """How many disjoint rules the operation has (1 if unknown / single-rule)."""
+    if operation in OPERATION_RULE_INFO:
+        return OPERATION_RULE_INFO[operation][0]
+    return 1
+
+
+def resolve_rule_id(operation: str, a: int, b: int, p: int) -> int:
+    if operation not in OPERATION_RULE_INFO:
+        return 0
+    n, fn = OPERATION_RULE_INFO[operation]
+    rid = int(fn(a, b, p))
+    if not 0 <= rid < n:
+        raise RuntimeError(f"rule_id {rid} out of range for {operation!r} (n={n})")
+    return rid
+
+
+def validate_rule_count(operation: str, rule_count: int) -> None:
+    """
+    rule_count == 1: standard overlapping outputs in 0..p-1.
+    rule_count == n: disjoint bands [0,p-1], [p,2p-1], … when n matches the op's branch count.
+    """
+    if rule_count < 1:
+        raise ValueError("rule_count must be >= 1")
+    n = operation_num_rules(operation)
+    if rule_count == 1:
+        return
+    if rule_count != n:
+        raise ValueError(
+            f"rule_count={rule_count} incompatible with operation {operation!r} "
+            f"(that op has {n} branch(es); use rule_count={n} for disjoint bands, or 1 for default)."
+        )
+
+
+def encode_disjoint_rule_output(local_c: int, rule_id: int, p: int) -> int:
+    """Map branch-local result in 0..p-1 to a global class in 0 .. rule_count*p - 1."""
+    c = int(local_c) % p
+    return int(rule_id) * p + c
+
 
 def resolve_branch_metric(operation: str, branch_metric_cfg: str) -> str:
     """
@@ -423,10 +534,16 @@ def _require_label_mod(label_mod: int) -> int:
     return label_mod
 
 
-def category_label_num_classes(label_mode: str, label_mod: int = 3, *, p: int) -> int:
+def category_label_num_classes(
+    label_mode: str,
+    label_mod: int = 3,
+    *,
+    p: int,
+    rule_count: int = 1,
+) -> int:
     """Number of classes for categorical targets (integer-domain experiments)."""
     if label_mode == "c":
-        return p
+        return p * rule_count
     if label_mode in ("c_parity", "b_parity", "a_parity"):
         return 2
     if label_mode in ("c_mod3", "a_plus_b_mod3"):
@@ -458,7 +575,8 @@ def compute_category_label(
 
     ``c_mod3`` / ``a_plus_b_mod3`` are fixed-3 aliases (same as ``label_mod=3``).
 
-    ``c`` uses the full output ``c`` in ``0 .. p-1`` as the class id (``num_classes = p``).
+    ``c`` uses the full (possibly disjoint) output as class id: ``0 .. p-1`` or
+    ``0 .. rule_count*p-1`` when ``rule_count > 1`` in the dataloader.
     """
     if label_mode == "c":
         return c
@@ -492,6 +610,8 @@ def _encode_integer_pairs(
     fmt: str = "a_op_b_eq",
     label_mode: Optional[str] = None,
     label_mod: int = 3,
+    operation: str = "add",
+    rule_count: int = 1,
 ):
     """
     Encode integer pairs into (input_seq, label) tensors.
@@ -535,7 +655,12 @@ def _encode_integer_pairs(
 
     xs, ys = [], []
     for a, b in pairs:
-        c = op_fn(a, b, p)
+        c_local = op_fn(a, b, p)
+        c = (
+            encode_disjoint_rule_output(c_local, resolve_rule_id(operation, a, b, p), p)
+            if rule_count > 1
+            else c_local
+        )
         xs.append(make_seq(a, b))
         if label_mode is None:
             ys.append(c)
@@ -604,6 +729,7 @@ def make_dataset(
     input_format: str = "a_op_b_eq",
     seed: int = 42,
     label_noise: float = 0.0,
+    rule_count: int = 1,
 ):
     """
     Build train/val TensorDatasets for a given binary operation.
@@ -622,11 +748,16 @@ def make_dataset(
                            "a_op_b_eq_rule"  → [rule, a, op, b, =]
     seed               : random seed for the train/val split
     label_noise        : fraction of *training* labels to randomly corrupt
+    rule_count         : 1 = outputs in ``0..p-1`` (default).  ``n > 1`` must match the
+                         operation's branch count; then labels are disjoint bands
+                         ``[0,p-1], [p,2p-1], …`` so the active rule is identifiable.
 
     Returns
     -------
     train_ds, val_ds   : TensorDataset objects
-    vocab_size         : size of the token vocabulary
+    vocab_size         : size of the token vocabulary (for embeddings / input tokens)
+    num_logits         : softmax width: ``rule_count * p`` if ``rule_count > 1``, else ``None``
+                         (caller should use ``vocab_size`` when ``None``).
     """
     if operation not in OPERATIONS:
         raise ValueError(
@@ -635,6 +766,7 @@ def make_dataset(
         )
 
     op_fn, is_s5, domain_fn = OPERATIONS[operation]
+    validate_rule_count(operation, rule_count)
 
     # ── build all pairs ────────────────────────────────────────────────────
     all_pairs = domain_fn(p)
@@ -656,22 +788,33 @@ def make_dataset(
         x_val,   y_val,   _  = _encode_s5_pairs(val_pairs,   op_fn, input_format)
         vocab_size = len(_all_S5()) + 2 + ve
     else:
-        x_train, y_train, ve = _encode_integer_pairs(train_pairs, op_fn, p, input_format)
-        x_val,   y_val,   _  = _encode_integer_pairs(val_pairs,   op_fn, p, input_format)
+        x_train, y_train, ve = _encode_integer_pairs(
+            train_pairs, op_fn, p, input_format,
+            operation=operation, rule_count=rule_count,
+        )
+        x_val,   y_val,   _  = _encode_integer_pairs(
+            val_pairs,   op_fn, p, input_format,
+            operation=operation, rule_count=rule_count,
+        )
         _, _, base_vocab = _build_vocab_integer(p)
         vocab_size = base_vocab + ve
+
+    num_logits = (rule_count * p) if (not is_s5 and rule_count > 1) else None
 
     # ── optional label noise on training set ───────────────────────────────
     if label_noise > 0.0:
         n_noisy = int(len(y_train) * label_noise)
         noisy_idx = torch.randperm(len(y_train))[:n_noisy]
-        # corrupt only among valid answer tokens (0 .. p-1 or 0 .. 119)
-        n_answers = vocab_size - 2 - ve
+        if is_s5:
+            n_answers = vocab_size - 2 - ve
+        else:
+            n_answers = rule_count * p if rule_count > 1 else (vocab_size - 2 - ve)
         y_train[noisy_idx] = torch.randint(0, n_answers, (n_noisy,))
 
     return (TensorDataset(x_train, y_train),
             TensorDataset(x_val,   y_val),
-            vocab_size)
+            vocab_size,
+            num_logits)
 
 
 def make_category_dataset(
@@ -684,6 +827,7 @@ def make_category_dataset(
     label_noise: float = 0.0,
     label_mode: str = "c_parity",
     label_mod: int = 3,
+    rule_count: int = 1,
 ):
     """
     Same token sequences as ``make_dataset``, but targets are categorical class indices.
@@ -693,6 +837,10 @@ def make_category_dataset(
         ``c_mod3``, ``c_mod`` (use ``label_mod=k`` for ``c % k``).
       - **Input-based:** ``b_parity``, ``a_parity``, ``a_plus_b_mod3``, ``a_plus_b_mod``
         (``a_plus_b_mod`` with large ``label_mod`` gives a high-cardinality input statistic).
+
+    ``rule_count`` (same semantics as ``make_dataset``): when ``> 1``, encodes outputs in
+    disjoint bands before applying ``label_mode`` on that scalar (e.g. ``label_mode=c`` →
+    ``num_classes = rule_count * p``).
 
     Returns ``train_ds, val_ds, vocab_size, num_classes`` (``num_classes`` is the softmax size).
     """
@@ -706,7 +854,10 @@ def make_category_dataset(
     if is_s5:
         raise ValueError("make_category_dataset supports integer mod-p ops only (not S5).")
 
-    num_classes = category_label_num_classes(label_mode, label_mod, p=p)
+    validate_rule_count(operation, rule_count)
+    num_classes = category_label_num_classes(
+        label_mode, label_mod, p=p, rule_count=rule_count,
+    )
 
     all_pairs = domain_fn(p)
     rng = random.Random(seed)
@@ -720,10 +871,24 @@ def make_category_dataset(
         train_pairs = train_pairs[:max_train_samples]
 
     x_train, y_train, ve = _encode_integer_pairs(
-        train_pairs, op_fn, p, input_format, label_mode=label_mode, label_mod=label_mod
+        train_pairs,
+        op_fn,
+        p,
+        input_format,
+        label_mode=label_mode,
+        label_mod=label_mod,
+        operation=operation,
+        rule_count=rule_count,
     )
     x_val, y_val, _ = _encode_integer_pairs(
-        val_pairs, op_fn, p, input_format, label_mode=label_mode, label_mod=label_mod
+        val_pairs,
+        op_fn,
+        p,
+        input_format,
+        label_mode=label_mode,
+        label_mod=label_mod,
+        operation=operation,
+        rule_count=rule_count,
     )
     _, _, base_vocab = _build_vocab_integer(p)
     vocab_size = base_vocab + ve
