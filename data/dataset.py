@@ -150,6 +150,46 @@ def op_4way_all_affine(a, b, p):
     return (2 * a + b) % p
 
 
+def op_10way_mixed_hard(a, b, p):
+    """
+    Ten-way split: ``region = (a + b) % 10``. Full ``p×p`` domain (no division).
+
+    Rough difficulty ramp (all mod p):
+      0: a + b
+      1: a - b
+      2: a * b
+      3: a + 2b
+      4: a² + b
+      5: a + b²
+      6: ab + a + b    [ (a+1)(b+1) - 1 ]
+      7: 2a + 3b + 5
+      8: a³ + b²
+      9: ab² + 2a
+
+    For categorical probes, ``label_mode=a_plus_b_mod`` with ``label_mod=10`` matches this branch key.
+    """
+    r = (a + b) % 10
+    if r == 0:
+        return (a + b) % p
+    if r == 1:
+        return (a - b) % p
+    if r == 2:
+        return (a * b) % p
+    if r == 3:
+        return (a + 2 * b) % p
+    if r == 4:
+        return (a * a + b) % p
+    if r == 5:
+        return (a + b * b) % p
+    if r == 6:
+        return (a * b + a + b) % p
+    if r == 7:
+        return (2 * a + 3 * b + 5) % p
+    if r == 8:
+        return (a * a * a + b * b) % p
+    return (a * b * b + 2 * a) % p
+
+
 # goal is to see if adding 1 is better than multiplying
 def op_add_or_add_1(a, b, p):
     """x ∘ y = x + y (mod p) if y is odd, else x + y + 1 (mod p)"""
@@ -306,6 +346,7 @@ OPERATIONS = {
     "4way_add_add2mul_sub2mul": (op_4way_add_add2mul_sub2mul, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "4way_add_sub_mul_div": (op_4way_add_sub_mul_div, False, lambda p: [(a, b) for a in range(p) for b in range(1, p)]),
     "4way_all_affine": (op_4way_all_affine, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "10way_mixed_hard": (op_10way_mixed_hard, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add_1":  (op_add_or_add_1,  False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_nothing": (op_add_or_nothing, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_mul_on_a_greater_than_b": (op_add_or_mul_on_a_greater_than_b, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
