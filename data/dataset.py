@@ -99,6 +99,21 @@ def op_3way_sub_add_mul(a, b, p):
         return (a - b) % p
     return (a * b) % p
 
+def op_3way_add_mul_div(a, b, p):
+    """Branch on region = (a + b) mod 3: 0 -> add, 1 -> mul, 2 -> div (all mod p).
+
+    When region is div and b ≡ 0 (mod p), inverse is undefined; use (a - b) % p == a % p
+    (same convention as ``op_div_or_sub`` for b == 0).
+    """
+    region = (a + b) % 3
+    if region == 0:
+        return (a + b) % p
+    if region == 1:
+        return (a * b) % p
+    if b % p == 0:
+        return (a - b) % p
+    return (a * pow(int(b), -1, p)) % p
+
 
 def op_3way_add_add_2_mul_mul(a, b, p):
     """Branch on region = (a + b) mod 3: 0 -> add, 1 -> a+2b, 2 -> ab (all mod p)."""
@@ -143,6 +158,8 @@ def op_4way_add_sub_mul_div(a, b, p):
     if region == 2:
         return (a * b) % p
     if region == 3:
+        if b % p == 0:
+            return (a - b) % p
         return (a * pow(int(b), -1, p)) % p
 
 def op_4way_all_affine(a, b, p):
@@ -350,6 +367,7 @@ OPERATIONS = {
     "add_or_mul_symmetric_on_a_minus_b_is_even": (op_add_or_mul_symmetric_on_a_minus_b_is_even, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "3way_sub_add_mul": (op_3way_sub_add_mul, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "3way_add_add_2_mul_mul": (op_3way_add_add_2_mul_mul, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "3way_add_mul_div": (op_3way_add_mul_div, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "4way_sub_add_mul_mul2": (op_4way_sub_add_mul_mul2, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "4way_add_add2mul_sub2mul": (op_4way_add_add2mul_sub2mul, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "4way_add_sub_mul_div": (op_4way_add_sub_mul_div, False, lambda p: [(a, b) for a in range(p) for b in range(1, p)]),
@@ -444,6 +462,7 @@ OPERATION_RULE_INFO = {
     "add_or_add5": (2, _rid_b_odd_branch0),
     "add_or_affine": (2, _rid_b_odd_branch0),
     "3way_sub_add_mul": (3, _rid_sum_mod_m(3)),
+    "3way_add_mul_div": (3, _rid_sum_mod_m(3)),
     "3way_add_add_2_mul_mul": (3, _rid_sum_mod_m(3)),
     "4way_sub_add_mul_mul2": (4, _rid_sum_mod_m(4)),
     "4way_add_add2mul_sub2mul": (4, _rid_sum_mod_m(4)),
