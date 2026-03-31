@@ -289,6 +289,20 @@ def train_category(
         print(f"Grokking gap       : {s['grok_gap']}")
         print(f"Elapsed            : {s['elapsed_sec']} s")
 
+    if cfg.checkpoint_path:
+        ckpt_dir = os.path.dirname(cfg.checkpoint_path)
+        if ckpt_dir:
+            os.makedirs(ckpt_dir, exist_ok=True)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "config": vars(cfg),
+            },
+            cfg.checkpoint_path,
+        )
+        if cfg.verbose:
+            print(f"Checkpoint saved   : {cfg.checkpoint_path}")
+
     return result
 
 
@@ -409,6 +423,7 @@ def _build_argparser() -> argparse.ArgumentParser:
         default="results",
         help="Where to write JSON (same schema as main.py; filename includes _cat_<label_mode>).",
     )
+    p.add_argument("--save_checkpoint", default=None, help="Optional path to save model checkpoint (.pt).")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--sweep", nargs="+", default=None, metavar=("PARAM", "VAL"),
                    help="1D sweep: --sweep rule_count 1 2")
@@ -500,6 +515,7 @@ if __name__ == "__main__":
         label_mode=args.label_mode,
         label_mod=args.label_mod,
         rule_count=args.rule_count,
+        checkpoint_path=args.save_checkpoint,
     )
     # Same precedence as main.py: 2D grid → 1D sweep → single run
     if args.grid1 is not None and args.grid2 is not None:

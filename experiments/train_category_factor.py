@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -352,10 +353,34 @@ def train_factor_run(
         print(f"Grokking gap       : {s['grok_gap']}")
         print(f"Elapsed            : {s['elapsed_sec']} s")
 
+    if cfg.checkpoint_path:
+        ckpt_dir = os.path.dirname(cfg.checkpoint_path)
+        if ckpt_dir:
+            os.makedirs(ckpt_dir, exist_ok=True)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "config": vars(cfg),
+            },
+            cfg.checkpoint_path,
+        )
+        if cfg.verbose:
+            print(f"Checkpoint saved   : {cfg.checkpoint_path}")
+
     return result, extra
 
 
-def _run_one(cfg: TrainFactorConfig, results_dir: str) -> None:
+def _run_one(
+    cfg: TrainFactorConfig,
+    results_dir: str,
+    *,
+    auto_pca: bool = False,
+    pca_split: str = "both",
+    pca_max_samples: int = 2000,
+    pca_layer: str = "last",
+    pca_pool: str = "last_token",
+    pca_output_dir: Optional[str] = None,
+) -> None:
     if cfg.rule_count < 2:
         raise ValueError("factor experiments need rule_count >= 2 (disjoint bands). Use --rule_count 2.")
 
@@ -383,6 +408,36 @@ def _run_one(cfg: TrainFactorConfig, results_dir: str) -> None:
     path = _save_factor_result(result, extra, results_dir, cfg)
     if cfg.verbose:
         print(f"  -> saved to {path}")
+
+    if auto_pca:
+        if not cfg.checkpoint_path:
+            raise ValueError(
+                "--auto_pca requires --save_checkpoint so analysis can load weights."
+            )
+        pca_out = pca_output_dir
+        if not pca_out:
+            ckpt_stem = os.path.splitext(os.path.basename(cfg.checkpoint_path))[0]
+            pca_out = os.path.join(os.path.dirname(cfg.checkpoint_path), f"{ckpt_stem}_pca")
+        cmd = [
+            sys.executable,
+            os.path.join("analysis", "pca_hidden_states.py"),
+            "--checkpoint",
+            cfg.checkpoint_path,
+            "--split",
+            pca_split,
+            "--max_samples",
+            str(pca_max_samples),
+            "--layer",
+            pca_layer,
+            "--pool",
+            pca_pool,
+            "--output_dir",
+            pca_out,
+        ]
+        if cfg.verbose:
+            print("Running PCA analysis...")
+            print("  " + " ".join(cmd))
+        subprocess.run(cmd, check=True)
 
 
 def _build_argparser() -> argparse.ArgumentParser:
@@ -425,6 +480,13 @@ def _build_argparser() -> argparse.ArgumentParser:
         default="results_factor",
         help="Separate from default results/ (e.g. results_factor or !previous_results_factor).",
     )
+    p.add_argument("--save_checkpoint", default=None, help="Optional path to save model checkpoint (.pt).")
+    p.add_argument("--auto_pca", action="store_true", help="Run hidden-state PCA automatically after training.")
+    p.add_argument("--pca_split", default="both", choices=["train", "val", "both"])
+    p.add_argument("--pca_max_samples", type=int, default=2000)
+    p.add_argument("--pca_layer", default="last")
+    p.add_argument("--pca_pool", default="last_token", choices=["last_token", "mean"])
+    p.add_argument("--pca_output_dir", default=None, help="Optional PCA output dir. Default: next to checkpoint.")
     p.add_argument("--quiet", action="store_true")
     return p
 
@@ -450,9 +512,19 @@ if __name__ == "__main__":
         verbose=not args.quiet,
         rule_count=args.rule_count,
         factor_mode=args.factor_mode,
+        checkpoint_path=args.save_checkpoint,
     )
     proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     results_dir = args.results_dir
     if not os.path.isabs(results_dir):
         results_dir = os.path.join(proj, results_dir)
-    _run_one(cfg, results_dir)
+    _run_one(
+        cfg,
+        results_dir,
+        auto_pca=args.auto_pca,
+        pca_split=args.pca_split,
+        pca_max_samples=args.pca_max_samples,
+        pca_layer=args.pca_layer,
+        pca_pool=args.pca_pool,
+        pca_output_dir=args.pca_output_dir,
+    )

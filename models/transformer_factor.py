@@ -6,7 +6,7 @@ Kept separate from ``transformer.py`` for ablation experiments (joint vs single 
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -50,11 +50,17 @@ class FactoredTransformer(nn.Module):
         self.head_rule = nn.Linear(d_model, self.rule_count)
         self.head_c = nn.Linear(d_model, self.p)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor, return_hidden: bool = False
+    ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         emb = self.embedding(x)
         out = self.transformer(emb)
         h = out[:, -1, :]
-        return self.head_rule(h), self.head_c(h)
+        rule_logits = self.head_rule(h)
+        c_logits = self.head_c(h)
+        if return_hidden:
+            return rule_logits, c_logits, out
+        return rule_logits, c_logits
 
 
 def count_parameters(model: nn.Module) -> int:

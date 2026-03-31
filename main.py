@@ -102,6 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── output ────────────────────────────────────────────────────────────
     p.add_argument("--results_dir",  default="results")
+    p.add_argument("--save_checkpoint", default=None,
+                   help="Optional path to save model checkpoint (.pt).")
     p.add_argument("--quiet",        action="store_true")
 
     return p
@@ -303,6 +305,7 @@ def main():
         branch_metric     = args.branch_metric,
         rule_count        = args.rule_count,
         num_logits        = None,
+        checkpoint_path   = args.save_checkpoint,
     )
 
     # ── 2D grid ───────────────────────────────────────────────────────────

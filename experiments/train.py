@@ -3,6 +3,7 @@ Training loop and metric tracking for grokking experiments.
 """
 
 import time
+import os
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -118,6 +119,7 @@ class TrainConfig:
     # Disjoint multi-rule targets (see data.dataset.make_dataset); softmax width if set
     rule_count:     int   = 1
     num_logits:     Optional[int] = None    # None → use vocab_size in train()
+    checkpoint_path: Optional[str] = None   # optional output checkpoint (.pt)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,5 +374,19 @@ def train(
         print(f"Grokking epoch     : {s['grok_epoch']}")
         print(f"Grokking gap       : {s['grok_gap']}")
         print(f"Elapsed            : {s['elapsed_sec']} s")
+
+    if cfg.checkpoint_path:
+        ckpt_dir = os.path.dirname(cfg.checkpoint_path)
+        if ckpt_dir:
+            os.makedirs(ckpt_dir, exist_ok=True)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "config": vars(cfg),
+            },
+            cfg.checkpoint_path,
+        )
+        if cfg.verbose:
+            print(f"Checkpoint saved   : {cfg.checkpoint_path}")
 
     return result
