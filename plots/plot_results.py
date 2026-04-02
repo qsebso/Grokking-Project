@@ -69,6 +69,24 @@ def _infer_task(data: dict, cfg: dict) -> str:
     return "regression"
 
 
+def _noise_segment(cfg: dict) -> str | None:
+    """Train label noise from summary (asymmetric / symmetric); None if both zero or absent."""
+    try:
+        ln = float(cfg.get("label_noise") or 0)
+    except (TypeError, ValueError):
+        ln = 0.0
+    try:
+        lns = float(cfg.get("label_noise_sym") or 0)
+    except (TypeError, ValueError):
+        lns = 0.0
+    bits: list[str] = []
+    if ln > 0:
+        bits.append(f"noise_asy={ln}")
+    if lns > 0:
+        bits.append(f"noise_sym={lns}")
+    return "  |  ".join(bits) if bits else None
+
+
 def _task_line(data: dict, cfg: dict | None = None) -> str:
     """Experiment kind: task name, label_mode, num classes (and label_mod when relevant)."""
     cfg = cfg if cfg is not None else (data.get("summary") or {})
@@ -85,7 +103,14 @@ def _task_line(data: dict, cfg: dict | None = None) -> str:
     rc = cfg.get("rule_count", 1)
     if isinstance(rc, int) and rc > 1:
         parts.append(f"rule_count={rc}")
-    return "  |  ".join(parts)
+    infmt = cfg.get("input_format")
+    if infmt and infmt != "a_op_b_eq":
+        parts.append(f"fmt={infmt}")
+    line = "  |  ".join(parts)
+    nseg = _noise_segment(cfg)
+    if nseg:
+        line = f"{line}  |  {nseg}"
+    return line
 
 
 def find_results(patterns) -> list[str]:
@@ -190,6 +215,12 @@ def plot_sweep(results: list[dict], sweep_param: str, metric: str,
         cfg    = data["summary"]
         epochs = data["log_epochs"]
         label  = f"{sweep_param}={cfg.get(sweep_param, '?')}"
+        nseg = _noise_segment(cfg)
+        if nseg:
+            label = f"{label}  ({nseg})"
+        infmt = cfg.get("input_format")
+        if infmt and infmt != "a_op_b_eq":
+            label = f"{label}  [fmt={infmt}]"
         color  = get_color(i)
 
         if metric == "loss":
@@ -331,7 +362,12 @@ def _readable_name(cfg: dict) -> str:
     tf   = cfg.get("train_frac", "?")
     ep   = cfg.get("num_epochs", "?")
     p    = cfg.get("p", "?")
-    return f"{op} mod {p}  |  wd={wd}  lr={lr}  d={d}  train={int(float(tf)*100)}%  ep={ep}"
+    base = f"{op} mod {p}  |  wd={wd}  lr={lr}  d={d}  train={int(float(tf)*100)}%  ep={ep}"
+    infmt = cfg.get("input_format")
+    if infmt and infmt != "a_op_b_eq":
+        base = f"{base}  |  fmt={infmt}"
+    nseg = _noise_segment(cfg)
+    return f"{base}  |  {nseg}" if nseg else base
 
 
 def _make_title(cfg: dict, kind: str, data: dict | None = None) -> str:

@@ -40,12 +40,19 @@ from torch.utils.data import DataLoader, TensorDataset
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data.dataset import make_category_dataset, resolve_branch_metric, branch_metric_labels
+from data.dataset import (
+    make_category_dataset,
+    resolve_branch_metric,
+    branch_metric_labels,
+    register_noise_mode_cli_args,
+    resolve_parsed_noise_mode,
+)
 from experiments.train import (
     TrainConfig,
     TrainResult,
     _branch_masks,
     _masked_acc,
+    noise_fname_suffix,
 )
 
 
@@ -330,6 +337,7 @@ def save_category_result(result: TrainResult, results_dir: str) -> str:
 
     mts = f"_n{cfg.max_train_samples}" if cfg.max_train_samples else ""
     fmt = f"_fmt{cfg.input_format}" if cfg.input_format != "a_op_b_eq" else ""
+    nz = noise_fname_suffix(cfg)
     fname = (
         f"{cfg.operation}_p{cfg.p}"
         f"_wd{cfg.weight_decay}"
@@ -337,7 +345,7 @@ def save_category_result(result: TrainResult, results_dir: str) -> str:
         f"_d{cfg.d_model}"
         f"_l{cfg.num_layers}"
         f"_tf{cfg.train_frac}"
-        f"{mts}{fmt}"
+        f"{mts}{fmt}{nz}"
         f"{_category_fname_suffix(cfg)}"
         f"_ep{cfg.num_epochs}.json"
     )
@@ -402,7 +410,25 @@ def _build_argparser() -> argparse.ArgumentParser:
                        "a_op_bparity_eq",
                    ])
     p.add_argument("--data_seed", type=int, default=42)
-    p.add_argument("--label_noise", type=float, default=0.0)
+    p.add_argument(
+        "--label_noise",
+        type=float,
+        default=0.0,
+        help="Asymmetric train noise (random wrong class). Prefer --noise.",
+    )
+    p.add_argument(
+        "--noise",
+        type=float,
+        default=None,
+        help="Asymmetric train label noise; overrides --label_noise if set.",
+    )
+    p.add_argument(
+        "--noise_sym",
+        type=float,
+        default=0.0,
+        help="Symmetric train label noise (pair swaps).",
+    )
+    register_noise_mode_cli_args(p)
     p.add_argument("--num_epochs", type=int, default=5000)
     p.add_argument("--log_every", type=int, default=50)
     p.add_argument("--lr", type=float, default=1e-3)
@@ -462,14 +488,23 @@ def _run_one(cfg: TrainCategoryConfig, results_dir: str) -> TrainResult:
         input_format=cfg.input_format,
         seed=cfg.data_seed,
         label_noise=cfg.label_noise,
+        label_noise_sym=cfg.label_noise_sym,
         label_mode=cfg.label_mode,
         label_mod=cfg.label_mod,
         rule_count=cfg.rule_count,
+        noise_mode=cfg.noise_mode,
+        noise_fixed_target=cfg.noise_fixed_target,
+        noise_fixed_backup=cfg.noise_fixed_backup,
     )
     print(
         f"train={len(train_ds):,}  val={len(val_ds):,}  vocab={vocab_size}  classes={num_classes}"
         + (f"  (label_mod={cfg.label_mod})" if cfg.label_mode in ("c_mod", "a_plus_b_mod") else "")
         + (f"  rule_count={cfg.rule_count}" if cfg.rule_count > 1 else "")
+        + (
+            f"  noise_asy={cfg.label_noise} noise_sym={cfg.label_noise_sym} noise_mode={cfg.noise_mode}"
+            if (cfg.label_noise > 0 or cfg.label_noise_sym > 0)
+            else ""
+        )
     )
     result = train_category(train_ds, val_ds, vocab_size, num_classes, cfg)
     out = save_category_result(result, results_dir)
@@ -496,13 +531,19 @@ def _print_2d_summary(p1: str, p2: str, results: List[TrainResult]) -> None:
 if __name__ == "__main__":
     parser = _build_argparser()
     args = parser.parse_args()
+    args.noise_mode = resolve_parsed_noise_mode(args, parser)
+    _noise_asy = args.noise if args.noise is not None else args.label_noise
     base_cfg = TrainCategoryConfig(
         operation=args.operation,
         p=args.p,
         train_frac=args.train_frac,
         input_format=args.input_format,
         data_seed=args.data_seed,
-        label_noise=args.label_noise,
+        label_noise=_noise_asy,
+        label_noise_sym=args.noise_sym,
+        noise_mode=args.noise_mode,
+        noise_fixed_target=args.noise_fixed_target,
+        noise_fixed_backup=args.noise_fixed_backup,
         num_epochs=args.num_epochs,
         log_every=args.log_every,
         lr=args.lr,

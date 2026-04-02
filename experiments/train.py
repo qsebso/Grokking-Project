@@ -87,8 +87,12 @@ class TrainConfig:
     train_frac:         float          = 0.5
     max_train_samples:  Optional[int]  = None   # None = no cap
     input_format:       str            = "a_op_b_eq"
-    label_noise:        float          = 0.0
+    label_noise:        float          = 0.0   # asymmetric: fraction of train rows to corrupt
+    label_noise_sym:    float          = 0.0   # symmetric: pair-swap noise on train
     data_seed:          int            = 42
+    noise_mode:         str            = "random_wrong_c"  # see data.dataset.NOISE_MODE_CHOICES
+    noise_fixed_target: int            = 5
+    noise_fixed_backup: Optional[int]  = None
 
     # ── model ────────────────────────────────────────────────────────────
     d_model:        int   = 128
@@ -120,6 +124,27 @@ class TrainConfig:
     rule_count:     int   = 1
     num_logits:     Optional[int] = None    # None → use vocab_size in train()
     checkpoint_path: Optional[str] = None   # optional output checkpoint (.pt)
+
+
+def noise_fname_suffix(cfg: Any) -> str:
+    """Filename fragment for non-zero label noise, e.g. ``_nasy0p1_sym0p05``."""
+    n = float(getattr(cfg, "label_noise", 0.0) or 0.0)
+    s = float(getattr(cfg, "label_noise_sym", 0.0) or 0.0)
+    nm = getattr(cfg, "noise_mode", "random_wrong_c") or "random_wrong_c"
+    parts: List[str] = []
+    if n > 0:
+        parts.append(f"asy{str(n).replace('.', 'p')}")
+        if nm != "random_wrong_c":
+            parts.append("nm" + nm.replace("_", ""))
+        nft = getattr(cfg, "noise_fixed_target", 5)
+        nfb = getattr(cfg, "noise_fixed_backup", None)
+        if nm in ("fixed_wrong_c", "fixed_wrong_c_cross_rule"):
+            parts.append(f"ft{nft}")
+            if nfb is not None:
+                parts.append(f"fb{int(nfb)}")
+    if s > 0:
+        parts.append(f"sym{str(s).replace('.', 'p')}")
+    return ("_n" + "_".join(parts)) if parts else ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +210,13 @@ class TrainResult:
         if lmod is not None:
             out["label_mod"] = lmod
         out["rule_count"] = getattr(self.config, "rule_count", 1)
+        out["label_noise"] = float(getattr(self.config, "label_noise", 0.0))
+        out["label_noise_sym"] = float(getattr(self.config, "label_noise_sym", 0.0))
+        out["noise_mode"] = getattr(self.config, "noise_mode", "random_wrong_c")
+        out["noise_fixed_target"] = int(getattr(self.config, "noise_fixed_target", 5))
+        nfb = getattr(self.config, "noise_fixed_backup", None)
+        if nfb is not None:
+            out["noise_fixed_backup"] = int(nfb)
         return out
 
 

@@ -9,7 +9,7 @@ import random
 import itertools
 import torch
 from torch.utils.data import TensorDataset
-from typing import Tuple, Optional
+from typing import List, Optional, Sequence, Tuple
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -512,6 +512,166 @@ def encode_disjoint_rule_output(local_c: int, rule_id: int, p: int) -> int:
     return int(rule_id) * p + c
 
 
+# ── Train label corruption (asymmetric + symmetric) ─────────────────────────
+
+NOISE_MODE_CHOICES = (
+    "random_wrong_c",
+    "fixed_wrong_c",
+    "shifted_wrong_c",
+    "other_rule_c",
+    "fixed_wrong_c_cross_rule",
+)
+
+# add/mul swap for ``other_rule_c`` (branching must match each op's implementation)
+OTHER_RULE_SUPPORTED_OPS = frozenset(
+    {
+        "add_or_mul",
+        "add_or_mul_symmetric_on_a_plus_b_is_even",
+        "add_or_mul_symmetric_on_a_minus_b_is_even",
+        "add_or_mul_on_a_greater_than_b",
+    }
+)
+
+
+def _branch_uses_mul(operation: str, a: int, b: int, p: int) -> bool:
+    """Whether the active branch applies multiplication (vs addition) for supported ops."""
+    del p
+    if operation == "add_or_mul":
+        return b % 2 == 0
+    if operation == "add_or_mul_symmetric_on_a_plus_b_is_even":
+        return (a + b) % 2 == 0
+    if operation == "add_or_mul_symmetric_on_a_minus_b_is_even":
+        return (a - b) % 2 == 0
+    if operation == "add_or_mul_on_a_greater_than_b":
+        return a < b
+    raise ValueError(
+        f"other_rule_c not implemented for operation={operation!r} "
+        f"(supported: {sorted(OTHER_RULE_SUPPORTED_OPS)})"
+    )
+
+
+def _other_rule_local_c(operation: str, a: int, b: int, p: int) -> int:
+    """Branch-local result under the *other* binary (add vs mul) for the same (a, b)."""
+    c_add = (a + b) % p
+    c_mul = (a * b) % p
+    if _branch_uses_mul(operation, a, b, p):
+        return c_add
+    return c_mul
+
+
+def _pick_fixed_wrong(true_y: int, primary: int, backup: int, num_classes: int) -> int:
+    if primary != true_y:
+        return primary
+    if backup != true_y:
+        return backup
+    for c in range(num_classes):
+        if c != true_y:
+            return c
+    raise ValueError("num_classes < 2: no incorrect label exists")
+
+
+def validate_noise_mode_config(
+    noise_mode: str,
+    label_noise: float,
+    *,
+    operation: str,
+    rule_count: int,
+    is_s5: bool = False,
+    label_mode: Optional[str] = None,
+) -> None:
+    if label_noise <= 0:
+        return
+    if noise_mode not in NOISE_MODE_CHOICES:
+        raise ValueError(f"Unknown noise_mode {noise_mode!r}; choose from {NOISE_MODE_CHOICES}")
+    if is_s5:
+        if noise_mode != "random_wrong_c":
+            raise ValueError(
+                f"S5 only supports noise_mode='random_wrong_c' (got {noise_mode!r})."
+            )
+        return
+    if noise_mode == "other_rule_c":
+        if rule_count != 2:
+            raise ValueError("other_rule_c requires rule_count=2.")
+        if operation not in OTHER_RULE_SUPPORTED_OPS:
+            raise ValueError(
+                f"other_rule_c is only implemented for {sorted(OTHER_RULE_SUPPORTED_OPS)}; "
+                f"got operation={operation!r}."
+            )
+        if label_mode is not None and label_mode != "c":
+            raise ValueError("other_rule_c with categorical training requires label_mode=c.")
+    elif noise_mode == "fixed_wrong_c_cross_rule":
+        if rule_count < 2:
+            raise ValueError("fixed_wrong_c_cross_rule requires rule_count>=2.")
+    elif noise_mode == "fixed_wrong_c":
+        if rule_count != 1:
+            raise ValueError(
+                "fixed_wrong_c is for rule_count=1; use fixed_wrong_c_cross_rule for multi-rule."
+            )
+    elif noise_mode == "shifted_wrong_c":
+        if rule_count != 1:
+            raise ValueError(
+                "shifted_wrong_c is for rule_count=1 (labels in a single band 0..p-1)."
+            )
+
+
+def resolve_parsed_noise_mode(args, parser=None) -> str:
+    """
+    Resolve CLI noise mode: at most one of the ``--fixed_wrong_c``-style flags, else ``--noise_mode``.
+    """
+    aliases: List[str] = []
+    for name in NOISE_MODE_CHOICES:
+        if getattr(args, f"noise_alias_{name}", False):
+            aliases.append(name)
+    if len(aliases) > 1:
+        msg = f"Use at most one noise-mode shorthand flag; got: {aliases}"
+        if parser is not None:
+            parser.error(msg)
+        raise ValueError(msg)
+    if aliases:
+        if getattr(args, "noise_mode", None) not in (None, aliases[0]):
+            msg = f"Conflicting noise mode: flags imply {aliases[0]!r} but --noise_mode={args.noise_mode!r}"
+            if parser is not None:
+                parser.error(msg)
+            raise ValueError(msg)
+        return aliases[0]
+    mode = getattr(args, "noise_mode", None) or "random_wrong_c"
+    return mode
+
+
+def register_noise_mode_cli_args(parser) -> None:
+    """Add ``--noise_mode``, shorthand flags, and fixed-target options (shared by main / category / factor)."""
+    parser.add_argument(
+        "--noise_mode",
+        type=str,
+        default=None,
+        choices=list(NOISE_MODE_CHOICES),
+        help=(
+            "Asymmetric corruption when --noise>0 (default: random_wrong_c). "
+            "Shorthand: --fixed_wrong_c, --shifted_wrong_c, --other_rule_c, …"
+        ),
+    )
+    for name in NOISE_MODE_CHOICES:
+        flag = f"--{name}"
+        parser.add_argument(
+            flag,
+            dest=f"noise_alias_{name}",
+            action="store_true",
+            help=f"Set noise_mode={name} (mutually exclusive with other mode flags).",
+        )
+    parser.add_argument(
+        "--noise_fixed_target",
+        type=int,
+        default=5,
+        help="Primary wrong class for fixed_wrong_c / fixed_wrong_c_cross_rule (mod num_classes).",
+    )
+    parser.add_argument(
+        "--noise_fixed_backup",
+        type=int,
+        default=None,
+        help="Second wrong class if true label equals noise_fixed_target (default: next class).",
+    )
+
+
 def resolve_branch_metric(operation: str, branch_metric_cfg: str) -> str:
     """
     How training should split per-sample accuracies (see experiments/train.py).
@@ -631,6 +791,137 @@ def compute_category_label(
         f"Unknown label_mode '{label_mode}'. "
         "Use: c, c_parity, b_parity, a_parity, c_mod3, a_plus_b_mod3, c_mod, a_plus_b_mod"
     )
+
+
+def _noise_generator(seed: int) -> torch.Generator:
+    """Isolated RNG for label noise; keeps noise reproducible for a given dataset ``seed``."""
+    g = torch.Generator()
+    g.manual_seed(int(seed))
+    return g
+
+
+def apply_train_label_corruption(
+    y_train: torch.Tensor,
+    train_pairs: Optional[Sequence[Tuple[int, int]]],
+    *,
+    operation: str,
+    p: int,
+    rule_count: int,
+    num_classes: int,
+    label_noise: float,
+    label_noise_sym: float,
+    noise_mode: str,
+    noise_fixed_target: int,
+    noise_fixed_backup: Optional[int],
+    generator: torch.Generator,
+) -> None:
+    """
+    Mutate training labels in place (asymmetric corruption then optional symmetric swaps).
+
+    ``noise_mode`` (with ``label_noise > 0``): which wrong-label rule to apply on a random
+    subset of training rows (same count as before: ``floor(n * label_noise)``).
+
+    Structured modes ``other_rule_c`` / ``shifted_wrong_c`` / … require ``train_pairs`` aligned
+    with ``y_train`` (same length, row i → (a,b)); pass ``None`` only for ``random_wrong_c`` /
+    ``fixed_*`` / ``shifted_wrong_c`` when pairs are unused (``shifted`` and ``fixed`` do not
+    need pairs; ``other_rule_c`` does).
+    """
+    if label_noise < 0 or label_noise_sym < 0:
+        raise ValueError("label noise rates must be >= 0")
+    if num_classes < 1:
+        raise ValueError("num_classes must be >= 1")
+
+    if label_noise > 0.0:
+        n_noisy = int(len(y_train) * label_noise)
+        if n_noisy > 0:
+            noisy_idx = torch.randperm(len(y_train), generator=generator)[:n_noisy]
+
+            if noise_mode == "random_wrong_c":
+                y_flat = y_train.view(-1)
+                for j in range(n_noisy):
+                    ii = int(noisy_idx[j].item())
+                    ty = int(y_flat[ii].item())
+                    nw = num_classes - 1
+                    if nw < 1:
+                        continue
+                    r = int(torch.randint(0, nw, (1,), generator=generator).item())
+                    k = 0
+                    for c in range(num_classes):
+                        if c == ty:
+                            continue
+                        if k == r:
+                            y_flat[ii] = c
+                            break
+                        k += 1
+
+            elif noise_mode == "fixed_wrong_c":
+                primary = int(noise_fixed_target) % num_classes
+                backup = noise_fixed_backup
+                if backup is None:
+                    backup = (primary + 1) % num_classes
+                else:
+                    backup = int(backup) % num_classes
+                if backup == primary:
+                    backup = (primary + 1) % num_classes
+                y_flat = y_train.view(-1)
+                for j in range(n_noisy):
+                    ii = int(noisy_idx[j].item())
+                    ty = int(y_flat[ii].item())
+                    y_flat[ii] = _pick_fixed_wrong(ty, primary, backup, num_classes)
+
+            elif noise_mode == "fixed_wrong_c_cross_rule":
+                primary = int(noise_fixed_target) % num_classes
+                backup = noise_fixed_backup
+                if backup is None:
+                    backup = (primary + 1) % num_classes
+                else:
+                    backup = int(backup) % num_classes
+                if backup == primary:
+                    backup = (primary + 1) % num_classes
+                y_flat = y_train.view(-1)
+                for j in range(n_noisy):
+                    ii = int(noisy_idx[j].item())
+                    ty = int(y_flat[ii].item())
+                    y_flat[ii] = _pick_fixed_wrong(ty, primary, backup, num_classes)
+
+            elif noise_mode == "shifted_wrong_c":
+                y_flat = y_train.view(-1)
+                for j in range(n_noisy):
+                    ii = int(noisy_idx[j].item())
+                    ty = int(y_flat[ii].item())
+                    shift = 1
+                    wrong = (ty + shift) % num_classes
+                    while wrong == ty and num_classes > 1:
+                        shift += 1
+                        wrong = (ty + shift) % num_classes
+                    y_flat[ii] = wrong
+
+            elif noise_mode == "other_rule_c":
+                if train_pairs is None or len(train_pairs) != len(y_train):
+                    raise ValueError(
+                        "other_rule_c requires train_pairs aligned with y_train (same length)."
+                    )
+                y_flat = y_train.view(-1)
+                for j in range(n_noisy):
+                    ii = int(noisy_idx[j].item())
+                    a, b = train_pairs[ii]
+                    rid = resolve_rule_id(operation, a, b, p)
+                    ol = _other_rule_local_c(operation, a, b, p)
+                    y_flat[ii] = encode_disjoint_rule_output(ol, rid, p)
+
+            else:
+                raise ValueError(f"Unknown noise_mode {noise_mode!r}")
+
+    if label_noise_sym > 0.0:
+        n_noisy = int(len(y_train) * label_noise_sym)
+        n_pairs = n_noisy // 2
+        if n_pairs > 0:
+            idx = torch.randperm(len(y_train), generator=generator)[: n_pairs * 2]
+            idx_a, idx_b = idx[:n_pairs], idx[n_pairs:]
+            ya = y_train[idx_a].clone()
+            yb = y_train[idx_b].clone()
+            y_train[idx_a] = yb
+            y_train[idx_b] = ya
 
 
 def _encode_integer_pairs(
@@ -780,7 +1071,11 @@ def make_dataset(
     input_format: str = "a_op_b_eq",
     seed: int = 42,
     label_noise: float = 0.0,
+    label_noise_sym: float = 0.0,
     rule_count: int = 1,
+    noise_mode: str = "random_wrong_c",
+    noise_fixed_target: int = 5,
+    noise_fixed_backup: Optional[int] = None,
 ):
     """
     Build train/val TensorDatasets for a given binary operation.
@@ -799,8 +1094,13 @@ def make_dataset(
                            "a_op_b_eq_rule"  → [rule, a, op, b, =]
                            "a_op_b_eq_bparity" → [a, op, b, b mod 2, =]
                            "a_op_bparity_eq"   → [a, op, b mod 2, =]
-    seed               : random seed for the train/val split
-    label_noise        : fraction of *training* labels to randomly corrupt
+    seed               : random seed for the train/val split and for label-noise RNG
+                         (same seed → same shuffle/split and same noisy train labels)
+    label_noise        : fraction of *training* rows to corrupt (asymmetric)
+    label_noise_sym    : fraction of *training* labels for symmetric pair-swap noise
+    noise_mode         : how corrupted labels are chosen (see ``NOISE_MODE_CHOICES``)
+    noise_fixed_target : primary wrong class for ``fixed_wrong_c*`` (mod num_classes)
+    noise_fixed_backup : alternate wrong class when true label equals target (default: next class)
     rule_count         : 1 = outputs in ``0..p-1`` (default).  ``n > 1`` must match the
                          operation's branch count; then labels are disjoint bands
                          ``[0,p-1], [p,2p-1], …`` so the active rule is identifiable.
@@ -820,6 +1120,14 @@ def make_dataset(
 
     op_fn, is_s5, domain_fn = OPERATIONS[operation]
     validate_rule_count(operation, rule_count)
+    validate_noise_mode_config(
+        noise_mode,
+        label_noise,
+        operation=operation,
+        rule_count=rule_count,
+        is_s5=is_s5,
+        label_mode=None,
+    )
 
     # ── build all pairs ────────────────────────────────────────────────────
     all_pairs = domain_fn(p)
@@ -855,14 +1163,41 @@ def make_dataset(
     num_logits = (rule_count * p) if (not is_s5 and rule_count > 1) else None
 
     # ── optional label noise on training set ───────────────────────────────
-    if label_noise > 0.0:
-        n_noisy = int(len(y_train) * label_noise)
-        noisy_idx = torch.randperm(len(y_train))[:n_noisy]
-        if is_s5:
-            n_answers = vocab_size - 2 - ve
-        else:
-            n_answers = rule_count * p if rule_count > 1 else (vocab_size - 2 - ve)
-        y_train[noisy_idx] = torch.randint(0, n_answers, (n_noisy,))
+    noise_gen = _noise_generator(seed)
+    if not is_s5:
+        n_answers = rule_count * p if rule_count > 1 else (vocab_size - 2 - ve)
+        apply_train_label_corruption(
+            y_train,
+            train_pairs,
+            operation=operation,
+            p=p,
+            rule_count=rule_count,
+            num_classes=n_answers,
+            label_noise=label_noise,
+            label_noise_sym=label_noise_sym,
+            noise_mode=noise_mode,
+            noise_fixed_target=noise_fixed_target,
+            noise_fixed_backup=noise_fixed_backup,
+            generator=noise_gen,
+        )
+    else:
+        if label_noise_sym > 0.0:
+            raise ValueError("label_noise_sym is not supported for S5 operations.")
+        n_answers = vocab_size - 2 - ve
+        apply_train_label_corruption(
+            y_train,
+            None,
+            operation=operation,
+            p=p,
+            rule_count=1,
+            num_classes=n_answers,
+            label_noise=label_noise,
+            label_noise_sym=0.0,
+            noise_mode="random_wrong_c",
+            noise_fixed_target=noise_fixed_target,
+            noise_fixed_backup=noise_fixed_backup,
+            generator=noise_gen,
+        )
 
     return (TensorDataset(x_train, y_train),
             TensorDataset(x_val,   y_val),
@@ -878,9 +1213,13 @@ def make_category_dataset(
     input_format: str = "a_op_b_eq",
     seed: int = 42,
     label_noise: float = 0.0,
+    label_noise_sym: float = 0.0,
     label_mode: str = "c_parity",
     label_mod: int = 3,
     rule_count: int = 1,
+    noise_mode: str = "random_wrong_c",
+    noise_fixed_target: int = 5,
+    noise_fixed_backup: Optional[int] = None,
 ):
     """
     Same token sequences as ``make_dataset``, but targets are categorical class indices.
@@ -895,6 +1234,10 @@ def make_category_dataset(
     disjoint bands before applying ``label_mode`` on that scalar (e.g. ``label_mode=c`` →
     ``num_classes = rule_count * p``).
 
+    ``label_noise`` / ``label_noise_sym`` apply only to the **training** split (see
+    ``apply_train_label_corruption``). The same ``seed`` controls the pair shuffle/split and
+    the label-noise pattern.
+
     Returns ``train_ds, val_ds, vocab_size, num_classes`` (``num_classes`` is the softmax size).
     """
     if operation not in OPERATIONS:
@@ -908,6 +1251,14 @@ def make_category_dataset(
         raise ValueError("make_category_dataset supports integer mod-p ops only (not S5).")
 
     validate_rule_count(operation, rule_count)
+    validate_noise_mode_config(
+        noise_mode,
+        label_noise,
+        operation=operation,
+        rule_count=rule_count,
+        is_s5=False,
+        label_mode=label_mode,
+    )
     num_classes = category_label_num_classes(
         label_mode, label_mod, p=p, rule_count=rule_count,
     )
@@ -946,10 +1297,20 @@ def make_category_dataset(
     _, _, base_vocab = _build_vocab_integer(p)
     vocab_size = base_vocab + ve
 
-    if label_noise > 0.0:
-        n_noisy = int(len(y_train) * label_noise)
-        noisy_idx = torch.randperm(len(y_train))[:n_noisy]
-        y_train[noisy_idx] = torch.randint(0, num_classes, (n_noisy,))
+    apply_train_label_corruption(
+        y_train,
+        train_pairs,
+        operation=operation,
+        p=p,
+        rule_count=rule_count,
+        num_classes=num_classes,
+        label_noise=label_noise,
+        label_noise_sym=label_noise_sym,
+        noise_mode=noise_mode,
+        noise_fixed_target=noise_fixed_target,
+        noise_fixed_backup=noise_fixed_backup,
+        generator=_noise_generator(seed),
+    )
 
     return (
         TensorDataset(x_train, y_train),

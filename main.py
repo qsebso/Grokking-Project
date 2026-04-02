@@ -28,8 +28,15 @@ import itertools
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from data.dataset      import make_dataset, OPERATIONS, resolve_branch_metric, branch_metric_labels
-from experiments.train import TrainConfig, train
+from data.dataset import (
+    make_dataset,
+    OPERATIONS,
+    resolve_branch_metric,
+    branch_metric_labels,
+    register_noise_mode_cli_args,
+    resolve_parsed_noise_mode,
+)
+from experiments.train import TrainConfig, train, noise_fname_suffix
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,7 +64,13 @@ def build_parser() -> argparse.ArgumentParser:
                        "a_op_b_eq_bparity",
                        "a_op_bparity_eq",
                    ])
-    p.add_argument("--label_noise",  type=float, default=0.0)
+    p.add_argument("--label_noise",  type=float, default=0.0,
+                   help="Asymmetric train label noise (random class). Prefer --noise for clarity.")
+    p.add_argument("--noise", type=float, default=None,
+                   help="Alias for asymmetric label noise; overrides --label_noise if set.")
+    p.add_argument("--noise_sym", type=float, default=0.0,
+                   help="Symmetric train label noise (pair swaps).")
+    register_noise_mode_cli_args(p)
     p.add_argument("--data_seed",    type=int,   default=42)
     p.add_argument(
         "--rule_count",
@@ -171,6 +184,7 @@ def _save_result(result, results_dir: str):
     mts   = f"_n{cfg.max_train_samples}" if cfg.max_train_samples else ""
     fmt   = f"_fmt{cfg.input_format}"    if cfg.input_format != "a_op_b_eq" else ""
     rc    = f"_rc{cfg.rule_count}" if getattr(cfg, "rule_count", 1) > 1 else ""
+    nz    = noise_fname_suffix(cfg)
     fname = (
         f"{cfg.operation}_p{cfg.p}"
         f"_wd{cfg.weight_decay}"
@@ -178,7 +192,7 @@ def _save_result(result, results_dir: str):
         f"_d{cfg.d_model}"
         f"_l{cfg.num_layers}"
         f"_tf{cfg.train_frac}"
-        f"{mts}{fmt}{rc}"
+        f"{mts}{fmt}{rc}{nz}"
         f"_ep{cfg.num_epochs}.json"
     )
     path = os.path.join(results_dir, fname)
@@ -222,6 +236,8 @@ def run_one(cfg: TrainConfig, results_dir: str):
     _l1, _l2 = branch_metric_labels(_bm)
     print(f"  branch_metric      = {cfg.branch_metric}  ->  {_bm}  ({_l1} / {_l2})")
     print(f"  rule_count         = {cfg.rule_count}")
+    if cfg.label_noise > 0:
+        print(f"  noise_mode         = {cfg.noise_mode}")
     print(f"{'='*60}")
 
     train_ds, val_ds, vocab_size, num_logits = make_dataset(
@@ -232,7 +248,11 @@ def run_one(cfg: TrainConfig, results_dir: str):
         input_format      = cfg.input_format,
         seed              = cfg.data_seed,
         label_noise       = cfg.label_noise,
+        label_noise_sym   = cfg.label_noise_sym,
         rule_count        = cfg.rule_count,
+        noise_mode        = cfg.noise_mode,
+        noise_fixed_target= cfg.noise_fixed_target,
+        noise_fixed_backup= cfg.noise_fixed_backup,
     )
     cfg.num_logits = num_logits
     nl = num_logits if num_logits is not None else vocab_size
@@ -282,6 +302,8 @@ def _print_2d_summary(p1: str, p2: str, results: list):
 def main():
     parser = build_parser()
     args   = parser.parse_args()
+    args.noise_mode = resolve_parsed_noise_mode(args, parser)
+    _noise_asym = args.noise if args.noise is not None else args.label_noise
 
     # ── base config ───────────────────────────────────────────────────────
     base_cfg = TrainConfig(
@@ -290,8 +312,12 @@ def main():
         train_frac        = args.train_frac,
         max_train_samples = args.max_train_samples,
         input_format      = args.input_format,
-        label_noise       = args.label_noise,
+        label_noise       = _noise_asym,
+        label_noise_sym   = args.noise_sym,
         data_seed         = args.data_seed,
+        noise_mode        = args.noise_mode,
+        noise_fixed_target= args.noise_fixed_target,
+        noise_fixed_backup= args.noise_fixed_backup,
         d_model           = args.d_model,
         nhead             = args.nhead,
         num_layers        = args.num_layers,

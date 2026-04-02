@@ -25,7 +25,7 @@ from torch.utils.data import TensorDataset
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data.dataset import make_dataset, resolve_rule_id
+from data.dataset import make_category_dataset, make_dataset, resolve_rule_id
 from models.transformer import TransformerModel
 from models.transformer_factor import FactoredTransformer
 
@@ -118,12 +118,42 @@ def _build_dataset_from_cfg(cfg: Dict[str, Any]) -> Tuple[TensorDataset, TensorD
     input_format = _get_from_cfg(cfg, "input_format", "a_op_b_eq")
     data_seed = int(_get_from_cfg(cfg, "data_seed", 42))
     label_noise = float(_get_from_cfg(cfg, "label_noise", 0.0))
+    label_noise_sym = float(_get_from_cfg(cfg, "label_noise_sym", 0.0))
     rule_count = int(_get_from_cfg(cfg, "rule_count", 1))
+    noise_mode = str(_get_from_cfg(cfg, "noise_mode", "random_wrong_c"))
+    noise_fixed_target = int(_get_from_cfg(cfg, "noise_fixed_target", 5))
+    noise_fixed_backup = _get_from_cfg(cfg, "noise_fixed_backup", None)
 
     if operation is None:
         raise ValueError(
             "Checkpoint config missing `operation`; cannot recreate dataset."
         )
+
+    # Categorical / factor checkpoints use ``make_category_dataset``; token-prediction uses ``make_dataset``.
+    label_mode = cfg.get("label_mode")
+    factor_mode = cfg.get("factor_mode")
+    if label_mode is not None or factor_mode is not None:
+        lm = str(label_mode) if label_mode is not None else "c"
+        label_mod = int(_get_from_cfg(cfg, "label_mod", 3))
+        if label_mod == 0 and lm not in ("c_mod", "a_plus_b_mod"):
+            label_mod = 3
+        train_ds, val_ds, _, _ = make_category_dataset(
+            operation=operation,
+            p=p,
+            train_frac=train_frac,
+            max_train_samples=max_train_samples,
+            input_format=input_format,
+            seed=data_seed,
+            label_noise=label_noise,
+            label_noise_sym=label_noise_sym,
+            label_mode=lm,
+            label_mod=label_mod,
+            rule_count=rule_count,
+            noise_mode=noise_mode,
+            noise_fixed_target=noise_fixed_target,
+            noise_fixed_backup=noise_fixed_backup,
+        )
+        return train_ds, val_ds
 
     train_ds, val_ds, _, _ = make_dataset(
         operation=operation,
@@ -133,7 +163,11 @@ def _build_dataset_from_cfg(cfg: Dict[str, Any]) -> Tuple[TensorDataset, TensorD
         input_format=input_format,
         seed=data_seed,
         label_noise=label_noise,
+        label_noise_sym=label_noise_sym,
         rule_count=rule_count,
+        noise_mode=noise_mode,
+        noise_fixed_target=noise_fixed_target,
+        noise_fixed_backup=noise_fixed_backup,
     )
     return train_ds, val_ds
 
@@ -188,9 +222,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    ckpt_path = os.path.abspath(args.checkpoint)
+    if not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(
+            f"Checkpoint not found: {ckpt_path}\n"
+            f"  cwd: {os.getcwd()}\n"
+            "  Use a full path, or cd to the folder that contains the .pt file."
+        )
     os.makedirs(args.output_dir, exist_ok=True)
 
-    state_dict, cfg = _load_checkpoint(args.checkpoint)
+    state_dict, cfg = _load_checkpoint(ckpt_path)
     train_ds, val_ds = _build_dataset_from_cfg(cfg)
 
     operation = str(_get_from_cfg(cfg, "operation", "add"))
