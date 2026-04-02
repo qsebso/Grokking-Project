@@ -210,6 +210,7 @@ class TrainResult:
         if lmod is not None:
             out["label_mod"] = lmod
         out["rule_count"] = getattr(self.config, "rule_count", 1)
+        out["data_seed"] = int(getattr(self.config, "data_seed", 42))
         out["label_noise"] = float(getattr(self.config, "label_noise", 0.0))
         out["label_noise_sym"] = float(getattr(self.config, "label_noise_sym", 0.0))
         out["noise_mode"] = getattr(self.config, "noise_mode", "random_wrong_c")

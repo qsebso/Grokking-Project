@@ -31,15 +31,39 @@ These names match `TrainConfig` in `experiments/train.py` unless noted.
 | `--p`                 | `97`                  | Modulus (ignored for S5 ops)                                                                                                                                                                                                         |
 | `--train_frac`        | `0.5`                 | Fraction of shuffled pairs → train; rest → val                                                                                                                                                                                       |
 | `--max_train_samples` | none                  | Hard cap on train size after split                                                                                                                                                                                                   |
-| `--data_seed`         | `42`                  | Shuffles/split for dataset construction                                                                                                                                                                                              |
+| `--data_seed`         | `42`                  | Seeds **both** (1) the Python RNG that shuffles all `(a,b)` pairs and splits train/val, and (2) a dedicated PyTorch `Generator` for **which** train rows get corrupted and **how** (for all asymmetric modes). Same `data_seed` + same other data flags ⇒ identical noisy training labels across runs and across `main.py` / `train_category` / `train_category_factor`. Model init uses a separate **`model_seed`** (default `42`) in `TrainConfig`. |
 | `--input_format`      | `a_op_b_eq`           | Token layout (see below)                                                                                                                                                                                                             |
 | `--rule_count`        | `1`                   | `1`: labels in `0..p-1`. `n>1`: disjoint bands `0..p-1`, `p..2p-1`, …; `**n` must match the op’s branch count** (e.g. `add_or_mul` → 2, 3-way ops → 3). See `OPERATION_RULE_INFO` in `data/dataset.py`.                              |
-| `--label_noise`       | `0.0`                 | **Asymmetric** train noise: replace a fraction of train labels with uniform random **valid** targets (implementation differs slightly: main uses answer range; categorical uses `0..num_classes-1`).                                 |
-| `--noise`             | none                  | If set, **overrides** `--label_noise` (asymmetric).                                                                                                                                                                                  |
-| `--noise_sym`         | `0.0`                 | **Symmetric** train noise: swap labels in random disjoint pairs (no change in marginal label distribution). If both asymmetric and symmetric are > 0, asymmetric is applied first, then symmetric. **Not** used for S5 in `main.py`. |
+| `--label_noise`       | `0.0`                 | Fraction of **training** rows to corrupt with asymmetric noise (`floor(n_train * value)` rows). Meaning of “corrupt” is set by **`--noise_mode`** (below). Val labels are always clean.                                              |
+| `--noise`             | none                  | If set, **overrides** `--label_noise` (asymmetric fraction).                                                                                                                                                                         |
+| `--noise_sym`         | `0.0`                 | **Symmetric** train noise: swap labels in random disjoint pairs (same seeded generator after asymmetric step). Asymmetric runs first, then symmetric. **Not** supported for S5 in `main.py`.                                           |
 
 
-**Categorical / factor only** (also on `train_category` and `train_category_factor`): targets are built with `make_category_dataset` (`label_mode`, `label_mod`, `rule_count`).
+### Train label noise: modes, fixed targets, and seeding
+
+All logic lives in `data/dataset.py` (`apply_train_label_corruption`, `NOISE_MODE_CHOICES`).
+
+**Fraction:** `--noise` / `--label_noise` sets the asymmetric fraction; `--noise_sym` sets symmetric pair swaps. Only the **training** split is modified.
+
+**Mode:** `--noise_mode` chooses *how* corrupted labels are chosen, or use exactly one shorthand flag:
+
+| `--noise_mode` / shorthand flag | When it applies | Behavior |
+| ------------------------------- | --------------- | -------- |
+| `random_wrong_c` (default) / `--random_wrong_c` | Any op, any `rule_count` | Random **incorrect** class uniform over all wrong labels (same label space as the task). |
+| `fixed_wrong_c` / `--fixed_wrong_c` | `rule_count == 1` | Corrupted rows → `--noise_fixed_target` (mod `num_classes`); if that equals the true label, use `--noise_fixed_backup` or the next class. |
+| `shifted_wrong_c` / `--shifted_wrong_c` | `rule_count == 1` | Corrupted rows → `(y + k) mod num_classes` with smallest `k ≥ 1` that changes the label. |
+| `other_rule_c` / `--other_rule_c` | `rule_count == 2`, op in add/mul family (see code) | On add branch, label becomes **mul** output; on mul branch, label becomes **add** output (same branch band). For **categorical** runs, requires `--label_mode c`. |
+| `fixed_wrong_c_cross_rule` / `--fixed_wrong_c_cross_rule` | `rule_count ≥ 2` | Like fixed wrong, but `--noise_fixed_target` is a **global** class in `0 .. rule_count*p - 1`. |
+
+**Fixed-target knobs:** `--noise_fixed_target` (default `5`), `--noise_fixed_backup` (optional; default picks another class if target collides with the true label).
+
+**Seeding (reproducibility):** Fix **`--data_seed`** to compare different models or hyperparameters on the **same** train/val split and the **same** corruption pattern (subset of noisy indices + random wrong labels in `random_wrong_c`, etc.). Changing only `--model_seed` (via `TrainConfig` / future CLI if added) changes initialization but not the data or noise.
+
+**S5:** Only `random_wrong_c` is allowed for asymmetric noise on permutation tasks.
+
+**Outputs:** JSON `summary` includes `noise_mode`, `noise_fixed_target`, and optional `noise_fixed_backup` when relevant; result filenames add fragments such as `_nasy0p1` and, for non-default modes, `_nm…` / `_ft…` (see `experiments/train.py` → `noise_fname_suffix`).
+
+**Categorical / factor only** (also on `train_category` and `train_category_factor`): targets are built with `make_category_dataset` (`label_mode`, `label_mod`, `rule_count`). Structured modes such as `other_rule_c` may require `label_mode=c` (enforced at dataset build time).
 
 ### Input formats (`--input_format`)
 
@@ -104,6 +128,11 @@ python main.py --weight_decay 0.1 --num_epochs 10000
 python main.py --sweep weight_decay 0.0 0.1 1.0
 python main.py --operation add_or_mul --rule_count 2 --input_format a_op_b_eq_bparity
 python main.py --noise 0.1 --noise_sym 0.0 --save_checkpoint checkpoints/run.pt
+
+# Same split + same noise as above, but pin seed explicitly (default is 42 if omitted):
+python main.py --operation add --noise 0.1 --data_seed 42 --shifted_wrong_c
+python main.py --operation add_or_mul --rule_count 2 --noise 0.1 --data_seed 42 --other_rule_c
+python -m experiments.train_category_factor --operation add_or_mul --rule_count 2 --noise 0.1 --data_seed 42 --fixed_wrong_c_cross_rule --noise_fixed_target 100
 ```
 
 ---
@@ -185,7 +214,7 @@ python -m experiments.train_category_factor --factor_mode joint --operation add_
 - `**train_category`:** same default; filenames include `_cat_<label_mode>` and optional `_rc<n>` for `rule_count > 1`.
 - `**train_category_factor`:** `results_factor/` by default; filenames include `_factor_<mode>_rc<n>`.
 
-Each JSON includes `**summary`** (hyperparameters, memo/grok epochs, `**label_noise**` / `**label_noise_sym**` when applicable) plus logged curves.
+Each JSON includes `**summary`** (hyperparameters, memo/grok epochs, `**label_noise**` / `**label_noise_sym**`, `**noise_mode**` / fixed-target fields when applicable, `**data_seed**`) plus logged curves.
 
 ---
 
