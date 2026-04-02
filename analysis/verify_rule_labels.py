@@ -63,7 +63,16 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--input_format", default="a_op_b_eq", choices=INPUT_CHOICES)
     ap.add_argument("--n_print", type=int, default=16, help="how many train examples to print")
+    ap.add_argument(
+        "--noise",
+        type=float,
+        default=None,
+        help="Asymmetric train label noise; overrides --label_noise if set.",
+    )
+    ap.add_argument("--label_noise", type=float, default=0.0)
+    ap.add_argument("--noise_sym", type=float, default=0.0, help="Symmetric pair-swap noise on train.")
     args = ap.parse_args()
+    _asy = args.noise if args.noise is not None else args.label_noise
 
     op_fn, _, _domain = OPERATIONS[args.operation]
     p = args.p
@@ -74,6 +83,8 @@ def main():
         train_frac=args.train_frac,
         input_format=args.input_format,
         seed=args.seed,
+        label_noise=_asy,
+        label_noise_sym=args.noise_sym,
         label_mode="c",
         label_mod=3,
         rule_count=2,

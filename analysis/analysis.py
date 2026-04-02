@@ -3,6 +3,9 @@
 Scan saved experiment JSONs (e.g. under ``!previous_results``) for runs with
 ``task: categorical`` and ``label_mode: c``.
 
+Saved JSON ``summary`` may include ``label_noise`` (asymmetric) and ``label_noise_sym``
+(symmetric pair-swap) when training used ``--noise`` / ``--noise_sym``.
+
 Output layout::
 
     analysis/
@@ -54,7 +57,7 @@ def _load_json(path: str) -> Optional[dict]:
 
 
 def _is_target_run(data: dict) -> bool:
-    if data.get("task") != "categorical":
+    if data.get("task") not in ("categorical", "categorical_factor"):
         return False
     summ = data.get("summary") or {}
     return summ.get("label_mode") == "c"
@@ -122,6 +125,8 @@ def analyze_payload(path: str, data: dict) -> Tuple[Optional[dict], Optional[dic
         "val_acc_last": va_last,
         "train_acc_mean_logs": _mean([float(x) for x in train_accs]) if train_accs else None,
         "val_acc_mean_logs": _mean([float(x) for x in val_accs]) if val_accs else None,
+        "label_noise": summ.get("label_noise"),
+        "label_noise_sym": summ.get("label_noise_sym"),
     }
 
     to_b1 = data.get("train_odd_accs")
@@ -575,6 +580,7 @@ def write_run_summary_txt(row: Dict[str, Any], out_path: str) -> None:
         f"Operation: {row.get('operation')}   p={row.get('p')}   rule_count={row.get('rule_count')}",
         f"num_classes: {row.get('num_classes')}   branch: {row.get('branch_metric')}",
         f"  branches: {row.get('branch_label_1')} / {row.get('branch_label_2')}",
+        f"Train label noise — asymmetric: {row.get('label_noise')}   symmetric: {row.get('label_noise_sym')}",
         "",
         "Accuracy (overall)",
         f"  Last logged epoch ({row.get('last_log_epoch')}):",

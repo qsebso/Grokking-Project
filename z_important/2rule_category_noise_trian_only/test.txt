@@ -1,0 +1,18 @@
+c1 — no routing, no noise
+python -m experiments.train_category_factor --operation add_or_mul --factor_mode joint --rule_count 2 --train_frac 0.5 --input_format a_op_b_eq --num_epochs 20000 --save_checkpoint checkpoints/2rule_noroute_clean_c1.pt
+
+c2 — routing, no noise
+python -m experiments.train_category_factor --operation add_or_mul --factor_mode joint --rule_count 2 --train_frac 0.5 --input_format a_op_b_eq_bparity --num_epochs 20000 --save_checkpoint checkpoints/2rule_route_clean_c2.pt
+
+c3 — no routing, random noise 
+python -m experiments.train_category_factor --operation add_or_mul --factor_mode joint --rule_count 2 --train_frac 0.5 --input_format a_op_b_eq --noise 0.1 --num_epochs 20000 --save_checkpoint checkpoints/2rule_noroute_randnoise_c3.pt
+
+c4 — routing, random noise (0.978 cap, equal val on rule and c, normally does grok but here did not, no 1 train accuracy, wd try > 1)
+python -m experiments.train_category_factor --operation add_or_mul --factor_mode joint --rule_count 2 --train_frac 0.5 --input_format a_op_b_eq_bparity --noise 0.1 --num_epochs 20000 --save_checkpoint checkpoints/2rule_route_randnoise_c4.pt
+
+c5 — no routing, symmetric noise 
+python -m experiments.train_category_factor --operation add_or_mul --factor_mode joint --rule_count 2 --train_frac 0.5 --input_format a_op_b_eq --noise_sym 0.1 --num_epochs 20000 --save_checkpoint checkpoints/2rule_noroute_symnoise_c5.pt
+
+c6 — routing, symmetric noise (similar to c4)
+python -m experiments.train_category_factor --operation add_or_mul --factor_mode joint --rule_count 2 --train_frac 0.5 --input_format a_op_b_eq_bparity --noise_sym 0.1 --num_epochs 20000 --save_checkpoint checkpoints/2rule_route_symnoise_c6.pt
+
