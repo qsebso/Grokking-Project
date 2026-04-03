@@ -173,7 +173,7 @@ python -m experiments.train_category --noise 0.1 --label_mode c --rule_count 2
   - `**rule_only`**: single head, target `y // p`.
   - `**c_only**`: single head, target `y % p`.
 
-Default `**--results_dir**` is `**results_factor**` (kept separate from `results/`).
+Default `**--results_dir**` is `**results**` (same as `main.py` / `train_category`; use a custom path if you want a separate folder).
 
 ### Extra flags
 
@@ -212,7 +212,7 @@ python -m experiments.train_category_factor --factor_mode joint --operation add_
 
 - `**main.py`:** `results/` (or `--results_dir`).
 - `**train_category`:** same default; filenames include `_cat_<label_mode>` and optional `_rc<n>` for `rule_count > 1`.
-- `**train_category_factor`:** `results_factor/` by default; filenames include `_factor_<mode>_rc<n>`.
+- `**train_category_factor`:** `results/` by default; filenames include `_factor_<mode>_rc<n>` (and optional `_mtconvexified` when not standard).
 
 Each JSON includes `**summary`** (hyperparameters, memo/grok epochs, `**label_noise**` / `**label_noise_sym**`, `**noise_mode**` / fixed-target fields when applicable, `**data_seed**`) plus logged curves.
 
@@ -241,8 +241,7 @@ data/dataset.py                  # Operations, datasets, label noise, rule ids
 models/transformer.py            # Single-head transformer
 models/transformer_factor.py     # Shared trunk + rule + c heads
 analysis/                        # analysis.py, pca_hidden_states.py, verify_rule_labels.py, …
-results/                         # Default JSON output (main + train_category)
-results_factor/                  # Default JSON output (train_category_factor)
+results/                         # Default JSON output (all entry points; optional legacy results_factor/)
 ```
 
 ---

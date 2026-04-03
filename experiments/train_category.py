@@ -48,11 +48,15 @@ from data.dataset import (
     resolve_parsed_noise_mode,
 )
 from experiments.train import (
+    MODEL_TYPE_CHOICES,
     TrainConfig,
     TrainResult,
     _branch_masks,
     _masked_acc,
+    build_sequence_model,
     noise_fname_suffix,
+    seed_everything,
+    seq_len_from_input_format,
 )
 
 
@@ -120,8 +124,6 @@ def train_category(
     num_classes: int,
     cfg: TrainCategoryConfig,
 ) -> TrainResult:
-    from models.transformer import TransformerModel, count_parameters
-
     cfg.num_classes = num_classes
 
     if cfg.device == "auto":
@@ -131,33 +133,23 @@ def train_category(
 
     if cfg.verbose:
         print(f"Device: {device}")
+        print(f"Model type: {cfg.model_type}")
         extra = f"  label_mod={cfg.label_mod}" if cfg.label_mode in ("c_mod", "a_plus_b_mod") else ""
         rc_extra = f"  rule_count={cfg.rule_count} (disjoint bands)" if cfg.rule_count > 1 else ""
         print(f"Categorical task: label_mode={cfg.label_mode}{extra}{rc_extra}  num_classes={num_classes}")
 
-    torch.manual_seed(cfg.model_seed)
-
-    _seq_len_map = {
-        "a_op_b_eq": 4,
-        "a_b_eq": 3,
-        "a_op_b_eq_rule": 5,
-        "a_op_b_eq_bparity": 5,
-        "a_op_bparity_eq": 4,
-    }
-    seq_len = _seq_len_map.get(cfg.input_format, 4)
-
-    model = TransformerModel(
+    seed_everything(cfg.model_seed)
+    seq_len = seq_len_from_input_format(cfg.input_format)
+    model, param_count = build_sequence_model(
         vocab_size=vocab_size,
-        d_model=cfg.d_model,
-        nhead=cfg.nhead,
-        num_layers=cfg.num_layers,
-        dim_feedforward=cfg.dim_feedforward,
+        cfg=cfg,
         seq_len=seq_len,
         num_logits=num_classes,
-    ).to(device)
+    )
+    model = model.to(device)
 
     if cfg.verbose:
-        print(f"Parameters: {count_parameters(model):,}")
+        print(f"Parameters: {param_count:,}")
         print(
             "  Per-class accuracies: full tables align with log_epochs in saved JSON; "
             "console shows slash detail only for K<=10, else min/p50/max."
@@ -337,6 +329,7 @@ def save_category_result(result: TrainResult, results_dir: str) -> str:
 
     mts = f"_n{cfg.max_train_samples}" if cfg.max_train_samples else ""
     fmt = f"_fmt{cfg.input_format}" if cfg.input_format != "a_op_b_eq" else ""
+    mt = f"_mt{cfg.model_type}" if getattr(cfg, "model_type", "standard") != "standard" else ""
     nz = noise_fname_suffix(cfg)
     fname = (
         f"{cfg.operation}_p{cfg.p}"
@@ -345,7 +338,7 @@ def save_category_result(result: TrainResult, results_dir: str) -> str:
         f"_d{cfg.d_model}"
         f"_l{cfg.num_layers}"
         f"_tf{cfg.train_frac}"
-        f"{mts}{fmt}{nz}"
+        f"{mts}{fmt}{mt}{nz}"
         f"{_category_fname_suffix(cfg)}"
         f"_ep{cfg.num_epochs}.json"
     )
@@ -410,6 +403,7 @@ def _build_argparser() -> argparse.ArgumentParser:
                        "a_op_bparity_eq",
                    ])
     p.add_argument("--data_seed", type=int, default=42)
+    p.add_argument("--model_seed", type=int, default=42)
     p.add_argument(
         "--label_noise",
         type=float,
@@ -436,6 +430,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--d_model", type=int, default=128)
     p.add_argument("--nhead", type=int, default=4)
     p.add_argument("--num_layers", type=int, default=2)
+    p.add_argument("--model_type", default="standard", choices=MODEL_TYPE_CHOICES)
     p.add_argument("--branch_metric", default="auto",
                    choices=["auto", "b_parity", "a_ge_b", "a_gt_b"])
     p.add_argument(
@@ -539,6 +534,7 @@ if __name__ == "__main__":
         train_frac=args.train_frac,
         input_format=args.input_format,
         data_seed=args.data_seed,
+        model_seed=args.model_seed,
         label_noise=_noise_asy,
         label_noise_sym=args.noise_sym,
         noise_mode=args.noise_mode,
@@ -551,6 +547,7 @@ if __name__ == "__main__":
         d_model=args.d_model,
         nhead=args.nhead,
         num_layers=args.num_layers,
+        model_type=args.model_type,
         branch_metric=args.branch_metric,
         verbose=not args.quiet,
         label_mode=args.label_mode,

@@ -36,7 +36,7 @@ from data.dataset import (
     register_noise_mode_cli_args,
     resolve_parsed_noise_mode,
 )
-from experiments.train import TrainConfig, train, noise_fname_suffix
+from experiments.train import MODEL_TYPE_CHOICES, TrainConfig, train, noise_fname_suffix
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -72,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Symmetric train label noise (pair swaps).")
     register_noise_mode_cli_args(p)
     p.add_argument("--data_seed",    type=int,   default=42)
+    p.add_argument("--model_seed",   type=int,   default=42)
     p.add_argument(
         "--rule_count",
         type=int,
@@ -85,6 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--nhead",        type=int,   default=4)
     p.add_argument("--num_layers",   type=int,   default=2)
     p.add_argument("--dim_feedforward", type=int, default=None)
+    p.add_argument("--model_type",   default="standard", choices=MODEL_TYPE_CHOICES)
 
     # ── optimiser ─────────────────────────────────────────────────────────
     p.add_argument("--lr",           type=float, default=1e-3)
@@ -184,6 +186,7 @@ def _save_result(result, results_dir: str):
     mts   = f"_n{cfg.max_train_samples}" if cfg.max_train_samples else ""
     fmt   = f"_fmt{cfg.input_format}"    if cfg.input_format != "a_op_b_eq" else ""
     rc    = f"_rc{cfg.rule_count}" if getattr(cfg, "rule_count", 1) > 1 else ""
+    mt    = f"_mt{cfg.model_type}" if getattr(cfg, "model_type", "standard") != "standard" else ""
     nz    = noise_fname_suffix(cfg)
     fname = (
         f"{cfg.operation}_p{cfg.p}"
@@ -192,7 +195,7 @@ def _save_result(result, results_dir: str):
         f"_d{cfg.d_model}"
         f"_l{cfg.num_layers}"
         f"_tf{cfg.train_frac}"
-        f"{mts}{fmt}{rc}{nz}"
+        f"{mts}{fmt}{rc}{mt}{nz}"
         f"_ep{cfg.num_epochs}.json"
     )
     path = os.path.join(results_dir, fname)
@@ -228,6 +231,7 @@ def run_one(cfg: TrainConfig, results_dir: str):
     print(f"  input_format       = {cfg.input_format}")
     print(f"  weight_decay       = {cfg.weight_decay}")
     print(f"  lr                 = {cfg.lr}")
+    print(f"  model_type         = {cfg.model_type}")
     print(f"  d_model            = {cfg.d_model}")
     print(f"  num_layers         = {cfg.num_layers}")
     print(f"  num_epochs         = {cfg.num_epochs}")
@@ -315,6 +319,7 @@ def main():
         label_noise       = _noise_asym,
         label_noise_sym   = args.noise_sym,
         data_seed         = args.data_seed,
+        model_seed        = args.model_seed,
         noise_mode        = args.noise_mode,
         noise_fixed_target= args.noise_fixed_target,
         noise_fixed_backup= args.noise_fixed_backup,
@@ -322,6 +327,7 @@ def main():
         nhead             = args.nhead,
         num_layers        = args.num_layers,
         dim_feedforward   = args.dim_feedforward,
+        model_type        = args.model_type,
         lr                = args.lr,
         weight_decay      = args.weight_decay,
         num_epochs        = args.num_epochs,
