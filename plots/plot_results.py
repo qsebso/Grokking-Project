@@ -2,11 +2,11 @@
 plot_results.py — Graph grokking experiment results
 ====================================================
 
-Reads JSON files from the results/ directory and produces plots.
+Reads JSON files from ``results/`` (and legacy ``results_factor/`` if ``results/`` is empty).
 
 USAGE
 -----
-# Plot everything in results/
+# Plot everything in results/ (main.py, train_category, train_category_factor)
     python plot_results.py
 
 # Plot only specific files
@@ -50,6 +50,22 @@ import numpy as np
 def load_result(path: str) -> dict:
     with open(path) as f:
         return json.load(f)
+
+
+def _model_type(cfg: dict) -> str:
+    """Architecture tag from saved summary; older JSONs default to standard."""
+    mt = cfg.get("model_type")
+    if mt is None or mt == "":
+        return "standard"
+    return str(mt)
+
+
+def _infer_plot_model_tag(results: list[dict]) -> str:
+    """Filename fragment for auto-named PNGs; ``mixed`` if runs disagree."""
+    mts = {_model_type(r["summary"]) for r in results}
+    if len(mts) == 1:
+        return next(iter(mts))
+    return "mixed"
 
 
 def _branch_plot_labels(data: dict) -> tuple[str, str, str, str]:
@@ -119,10 +135,18 @@ def find_results(patterns) -> list[str]:
         matched = sorted(glob.glob(pat))
         paths.extend(matched)
     if not paths:
-        # default: everything in results/
+        # default: unified results/ (main, train_category, train_category_factor)
         paths = sorted(glob.glob("results/*.json"))
     if not paths:
-        print("No result JSON files found. Run main.py first.")
+        legacy = sorted(glob.glob("results_factor/*.json"))
+        if legacy:
+            print(
+                "Note: no JSON in results/; using results_factor/*.json. "
+                "New runs default to --results_dir results."
+            )
+            paths = legacy
+    if not paths:
+        print("No result JSON files found. Run main.py (or train_category / train_category_factor) first.")
         sys.exit(1)
     return paths
 
@@ -180,7 +204,7 @@ def plot_single(data: dict, out: str, show: bool):
 
     ax1.set_xlabel("Epoch", fontsize=12)
     ax1.set_ylabel("Accuracy", fontsize=12)
-    ax1.set_title(_make_title(cfg, "Accuracy", data), fontsize=12)
+    ax1.set_title(_make_title(cfg, "Accuracy", data), fontsize=11)
     ax1.legend(fontsize=11)
     ax1.set_ylim(-0.05, 1.05)
     ax1.grid(alpha=0.3)
@@ -191,13 +215,13 @@ def plot_single(data: dict, out: str, show: bool):
 
     ax2.set_xlabel("Epoch", fontsize=12)
     ax2.set_ylabel("Loss",  fontsize=12)
-    ax2.set_title(_make_title(cfg, "Loss", data), fontsize=12)
+    ax2.set_title(_make_title(cfg, "Loss", data), fontsize=11)
     ax2.legend(fontsize=11)
     ax2.grid(alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"Saved → {out}")
+    print(f"Saved -> {out}")
     if show:
         plt.show()
     plt.close()
@@ -221,6 +245,8 @@ def plot_sweep(results: list[dict], sweep_param: str, metric: str,
         infmt = cfg.get("input_format")
         if infmt and infmt != "a_op_b_eq":
             label = f"{label}  [fmt={infmt}]"
+        if sweep_param != "model_type":
+            label = f"{label}  [model={_model_type(cfg)}]"
         color  = get_color(i)
 
         if metric == "loss":
@@ -243,16 +269,17 @@ def plot_sweep(results: list[dict], sweep_param: str, metric: str,
             ax.axvline(grok, color=color, lw=1, linestyle=":", alpha=0.7)
 
     ylabel = "Val Loss" if metric == "loss" else "Accuracy  (solid=val, dashed=train)"
-    op     = results[0]["summary"].get("operation", "?")
+    op = results[0]["summary"].get("operation", "?")
+    p0 = results[0]["summary"].get("p", "?")
+    mt_tag = _infer_plot_model_tag(results)
     ax.set_xlabel("Epoch", fontsize=12)
     ax.set_ylabel(ylabel,  fontsize=12)
     ax.set_title(
-        f"Sweep: {sweep_param}  |  op={op}  |  "
-        f"p={results[0]['summary'].get('p','?')}  |  "
-        f"train_frac={results[0]['summary'].get('train_frac','?')}\n"
-        f"{_task_line(results[0], results[0]['summary'])}  "
-        f"(from first run; legend = {sweep_param})",
-        fontsize=12,
+        f"Sweep: {sweep_param}  ·  {op}  ·  p={p0}  ·  model={mt_tag}\n"
+        f"train_frac={results[0]['summary'].get('train_frac', '?')}  ·  "
+        f"{_task_line(results[0], results[0]['summary'])}\n"
+        f"(legend = {sweep_param}; bracketed tags disambiguate runs)",
+        fontsize=11,
     )
     ax.legend(fontsize=11)
     if metric == "acc":
@@ -261,7 +288,7 @@ def plot_sweep(results: list[dict], sweep_param: str, metric: str,
 
     plt.tight_layout()
     plt.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"Saved → {out}")
+    print(f"Saved -> {out}")
     if show:
         plt.show()
     plt.close()
@@ -309,7 +336,7 @@ def plot_grid(results: list[dict], metric: str, out: str, show: bool):
 
         _mark_grokking(ax, cfg, fontsize=8)
 
-        ax.set_title(_short_title(cfg, data), fontsize=8)
+        ax.set_title(_short_title(cfg, data), fontsize=9)
         ax.set_xlabel("Epoch", fontsize=8)
         ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
@@ -318,13 +345,15 @@ def plot_grid(results: list[dict], metric: str, out: str, show: bool):
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
 
+    mt_tag = _infer_plot_model_tag(results)
     plt.suptitle(
-        f"All runs  |  metric={metric}",
-        fontsize=13, y=1.01,
+        f"All runs ({len(results)})  ·  metric={metric}  ·  model={mt_tag}",
+        fontsize=13,
+        y=1.02,
     )
     plt.tight_layout()
     plt.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"Saved → {out}")
+    print(f"Saved -> {out}")
     if show:
         plt.show()
     plt.close()
@@ -354,30 +383,41 @@ def _mark_grokking(ax, cfg: dict, fontsize=9):
 
 
 def _readable_name(cfg: dict) -> str:
-    """Human-readable one-liner built from the config fields."""
-    op   = cfg.get("operation", "?")
-    wd   = cfg.get("weight_decay", "?")
-    lr   = cfg.get("lr", "?")
-    d    = cfg.get("d_model", "?")
-    tf   = cfg.get("train_frac", "?")
-    ep   = cfg.get("num_epochs", "?")
-    p    = cfg.get("p", "?")
-    base = f"{op} mod {p}  |  wd={wd}  lr={lr}  d={d}  train={int(float(tf)*100)}%  ep={ep}"
+    """Human-readable one-liner: op, modulus, model type, then hparams."""
+    op = cfg.get("operation", "?")
+    p = cfg.get("p", "?")
+    mt = _model_type(cfg)
+    wd = cfg.get("weight_decay", "?")
+    lr = cfg.get("lr", "?")
+    d = cfg.get("d_model", "?")
+    tf = cfg.get("train_frac", "?")
+    ep = cfg.get("num_epochs", "?")
+    try:
+        tf_pct = int(float(tf) * 100)
+    except (TypeError, ValueError):
+        tf_pct = tf
+    base = f"{op}  (p={p}, {mt})  ·  wd={wd}  lr={lr}  d={d}  train={tf_pct}%  ep={ep}"
     infmt = cfg.get("input_format")
     if infmt and infmt != "a_op_b_eq":
-        base = f"{base}  |  fmt={infmt}"
+        base = f"{base}  ·  fmt={infmt}"
     nseg = _noise_segment(cfg)
-    return f"{base}  |  {nseg}" if nseg else base
+    return f"{base}  ·  {nseg}" if nseg else base
 
 
 def _make_title(cfg: dict, kind: str, data: dict | None = None) -> str:
     data = data or {}
-    return f"{_readable_name(cfg)}\n{_task_line(data, cfg)}\n{kind} over Training"
+    # Line 1: what is being plotted; line 2: hparams; line 3: task/noise (includes model= for JSON parity)
+    return f"{kind}\n{_readable_name(cfg)}\n{_task_line(data, cfg)}"
 
 
 def _short_title(cfg: dict, data: dict | None = None) -> str:
+    """Compact subplot title: bold contrast via short first line."""
     data = data or {}
-    return f"{_readable_name(cfg)}\n{_task_line(data, cfg)}"
+    op = cfg.get("operation", "?")
+    p = cfg.get("p", "?")
+    mt = _model_type(cfg)
+    head = f"{op}  ·  p={p}  ·  {mt}"
+    return f"{head}\n{_task_line(data, cfg)}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -402,7 +442,7 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("files", nargs="*",
-                   help="JSON result files (globs ok). Default: all in results/")
+                   help="JSON result files (globs ok). Default: all in results/ (then legacy results_factor/)")
     p.add_argument("--mode", choices=["single", "sweep", "grid"], default=None,
                    help="Plot style. Default: auto-detected from file count")
     p.add_argument("--sweep_param", default="weight_decay",
@@ -421,8 +461,8 @@ def main():
     for path, res in zip(paths, results):
         s = res["summary"]
         print(
-            f"  {Path(path).name}  →  memo={s['memo_epoch']}  grok={s['grok_epoch']}  "
-            f"gap={s['grok_gap']}  |  {_task_line(res, s)}"
+            f"  {Path(path).name}  ->  model={_model_type(s)}  memo={s['memo_epoch']}  "
+            f"grok={s['grok_epoch']}  gap={s['grok_gap']}  |  {_task_line(res, s)}"
         )
 
     # ── mode ──────────────────────────────────────────────────────────────
@@ -439,17 +479,23 @@ def main():
     else:
         # auto-name from the configs
         cfg0 = results[0]["summary"]
-        op   = cfg0.get("operation", "run")
-        ep   = cfg0.get("num_epochs", "")
-        tf   = int(float(cfg0.get("train_frac", 0.5)) * 100)
+        r0 = results[0]
+        op = cfg0.get("operation", "run")
+        ep = cfg0.get("num_epochs")
+        if ep is None or ep == "":
+            le = r0.get("log_epochs") or []
+            ep = le[-1] if le else "unknown"
+        tf = int(float(cfg0.get("train_frac", 0.5)) * 100)
+        mt = _infer_plot_model_tag(results)
+        mt_safe = str(mt).replace(" ", "_")
         if mode == "sweep":
-            out_path = f"plots/{op}_sweep_{args.sweep_param}_tf{tf}_ep{ep}.png"
+            out_path = f"plots/{op}_model-{mt_safe}_sweep_{args.sweep_param}_tf{tf}_ep{ep}.png"
         elif mode == "single":
-            wd  = cfg0.get("weight_decay", "")
-            lr  = cfg0.get("lr", "")
-            out_path = f"plots/{op}_wd{wd}_lr{lr}_tf{tf}_ep{ep}.png"
+            wd = cfg0.get("weight_decay", "")
+            lr = cfg0.get("lr", "")
+            out_path = f"plots/{op}_model-{mt_safe}_wd{wd}_lr{lr}_tf{tf}_ep{ep}.png"
         else:
-            out_path = f"plots/grid_{op}_tf{tf}_ep{ep}.png"
+            out_path = f"plots/grid_{op}_model-{mt_safe}_n{len(results)}_tf{tf}_ep{ep}.png"
 
     if mode == "single":
         plot_single(results[0], out_path, show)

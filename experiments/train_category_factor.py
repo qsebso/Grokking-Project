@@ -9,7 +9,7 @@ Uses the **same** ``label_mode=c`` disjoint labels ``y in {0..rule_count*p - 1}`
 - **rule_only**: single head, target = ``y // p`` (which rule band).
 - **c_only**: single head, target = ``y % p`` (local output mod p).
 
-Default results directory is ``results_factor`` so runs stay separate from ``results`` / ``!previous_results``.
+Default results directory is ``results`` (same as ``main.py`` / ``train_category``) so all JSON lives in one place for plotting.
 
 Example::
 
@@ -43,9 +43,18 @@ from data.dataset import (
     register_noise_mode_cli_args,
     resolve_parsed_noise_mode,
 )
-from experiments.train import TrainConfig, TrainResult, _branch_masks, _masked_acc, noise_fname_suffix
-from models.transformer import TransformerModel, count_parameters as count_params_single
-from models.transformer_factor import FactoredTransformer, count_parameters as count_params_factored
+from experiments.train import (
+    MODEL_TYPE_CHOICES,
+    TrainConfig,
+    TrainResult,
+    _branch_masks,
+    _masked_acc,
+    build_factored_model,
+    build_sequence_model,
+    noise_fname_suffix,
+    seed_everything,
+    seq_len_from_input_format,
+)
 
 
 @dataclass
@@ -64,6 +73,7 @@ def _save_factor_result(
     os.makedirs(results_dir, exist_ok=True)
     mts = f"_n{cfg.max_train_samples}" if cfg.max_train_samples else ""
     fmt = f"_fmt{cfg.input_format}" if cfg.input_format != "a_op_b_eq" else ""
+    mt = f"_mt{cfg.model_type}" if getattr(cfg, "model_type", "standard") != "standard" else ""
     nz = noise_fname_suffix(cfg)
     fname = (
         f"{cfg.operation}_p{cfg.p}"
@@ -72,7 +82,7 @@ def _save_factor_result(
         f"_d{cfg.d_model}"
         f"_l{cfg.num_layers}"
         f"_tf{cfg.train_frac}"
-        f"{mts}{fmt}{nz}"
+        f"{mts}{fmt}{mt}{nz}"
         f"_factor_{cfg.factor_mode}"
         f"_rc{cfg.rule_count}"
         f"_ep{cfg.num_epochs}.json"
@@ -115,16 +125,8 @@ def train_factor_run(
     from experiments.train import TrainResult
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") if cfg.device == "auto" else torch.device(cfg.device)
-    torch.manual_seed(cfg.model_seed)
-
-    _seq_len_map = {
-        "a_op_b_eq": 4,
-        "a_b_eq": 3,
-        "a_op_b_eq_rule": 5,
-        "a_op_b_eq_bparity": 5,
-        "a_op_bparity_eq": 4,
-    }
-    seq_len = _seq_len_map.get(cfg.input_format, 4)
+    seed_everything(cfg.model_seed)
+    seq_len = seq_len_from_input_format(cfg.input_format)
 
     x_tr, y_tr = train_ds.tensors[0].to(device), train_ds.tensors[1].to(device)
     x_va, y_va = val_ds.tensors[0].to(device), val_ds.tensors[1].to(device)
@@ -144,19 +146,16 @@ def train_factor_run(
     }
 
     if mode == "joint":
-        model = FactoredTransformer(
+        model, param_count = build_factored_model(
             vocab_size=vocab_size,
             rule_count=rule_count,
             p=p,
-            d_model=cfg.d_model,
-            nhead=cfg.nhead,
-            num_layers=cfg.num_layers,
+            cfg=cfg,
             seq_len=seq_len,
-            dim_feedforward=cfg.dim_feedforward,
-            dropout=0.0,
-        ).to(device)
+        )
+        model = model.to(device)
         if cfg.verbose:
-            print(f"FactoredTransformer  params={count_params_factored(model):,}")
+            print(f"{cfg.model_type} factored model  params={param_count:,}")
         opt = optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=cfg.betas)
         train_target_desc = "joint (rule + c heads)"
         # Extra metric series
@@ -167,39 +166,36 @@ def train_factor_run(
         tr_j: List[float] = []
         va_j: List[float] = []
     elif mode == "rule_only":
-        model = TransformerModel(
+        model, param_count = build_sequence_model(
             vocab_size=vocab_size,
-            d_model=cfg.d_model,
-            nhead=cfg.nhead,
-            num_layers=cfg.num_layers,
+            cfg=cfg,
             seq_len=seq_len,
-            dim_feedforward=cfg.dim_feedforward,
             num_logits=rule_count,
-        ).to(device)
+        )
+        model = model.to(device)
         if cfg.verbose:
-            print(f"TransformerModel rule head  params={count_params_single(model):,}")
+            print(f"{cfg.model_type} rule head  params={param_count:,}")
         opt = optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=cfg.betas)
         y_tr_t = y_rule_tr
         y_va_t = y_rule_va
         train_target_desc = "rule_id only"
     else:  # c_only
-        model = TransformerModel(
+        model, param_count = build_sequence_model(
             vocab_size=vocab_size,
-            d_model=cfg.d_model,
-            nhead=cfg.nhead,
-            num_layers=cfg.num_layers,
+            cfg=cfg,
             seq_len=seq_len,
-            dim_feedforward=cfg.dim_feedforward,
             num_logits=p,
-        ).to(device)
+        )
+        model = model.to(device)
         if cfg.verbose:
-            print(f"TransformerModel c_local head  params={count_params_single(model):,}")
+            print(f"{cfg.model_type} c_local head  params={param_count:,}")
         opt = optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=cfg.betas)
         y_tr_t = y_c_tr
         y_va_t = y_c_va
         train_target_desc = "c_local only"
 
     if cfg.verbose:
+        print(f"Model type: {cfg.model_type}")
         print(f"Factor mode: {mode}  ({train_target_desc})  device={device}")
 
     loader = None
@@ -481,6 +477,7 @@ def _build_argparser() -> argparse.ArgumentParser:
         ],
     )
     p.add_argument("--data_seed", type=int, default=42)
+    p.add_argument("--model_seed", type=int, default=42)
     p.add_argument(
         "--label_noise",
         type=float,
@@ -507,12 +504,13 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--d_model", type=int, default=128)
     p.add_argument("--nhead", type=int, default=4)
     p.add_argument("--num_layers", type=int, default=2)
+    p.add_argument("--model_type", default="standard", choices=MODEL_TYPE_CHOICES)
     p.add_argument("--branch_metric", default="auto", choices=["auto", "b_parity", "a_ge_b", "a_gt_b"])
     p.add_argument("--rule_count", type=int, default=2)
     p.add_argument(
         "--results_dir",
-        default="results_factor",
-        help="Separate from default results/ (e.g. results_factor or !previous_results_factor).",
+        default="results",
+        help="Directory for JSON logs (default: results, same as main.py).",
     )
     p.add_argument("--save_checkpoint", default=None, help="Optional path to save model checkpoint (.pt).")
     p.add_argument("--auto_pca", action="store_true", help="Run hidden-state PCA automatically after training.")
@@ -536,6 +534,7 @@ if __name__ == "__main__":
         train_frac=args.train_frac,
         input_format=args.input_format,
         data_seed=args.data_seed,
+        model_seed=args.model_seed,
         label_noise=_noise_asy,
         label_noise_sym=args.noise_sym,
         noise_mode=args.noise_mode,
@@ -548,6 +547,7 @@ if __name__ == "__main__":
         d_model=args.d_model,
         nhead=args.nhead,
         num_layers=args.num_layers,
+        model_type=args.model_type,
         branch_metric=args.branch_metric,
         verbose=not args.quiet,
         rule_count=args.rule_count,

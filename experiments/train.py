@@ -2,8 +2,9 @@
 Training loop and metric tracking for grokking experiments.
 """
 
-import time
 import os
+import random
+import time
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -13,6 +14,14 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
 from data.dataset import resolve_branch_metric, branch_metric_labels
+
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - numpy is optional here
+    np = None
+
+
+MODEL_TYPE_CHOICES = ("standard", "convexified")
 
 
 def _get_a_token_column(x: torch.Tensor, input_format: str) -> torch.Tensor:
@@ -99,6 +108,7 @@ class TrainConfig:
     nhead:          int   = 4
     num_layers:     int   = 2
     dim_feedforward: Optional[int] = None   # None → 4 * d_model
+    model_type:     str   = "standard"
 
     # ── optimiser ────────────────────────────────────────────────────────
     lr:             float = 1e-3
@@ -188,6 +198,7 @@ class TrainResult:
             "train_frac":        self.config.train_frac,
             "max_train_samples": self.config.max_train_samples,
             "input_format":      self.config.input_format,
+            "model_type":        getattr(self.config, "model_type", "standard"),
             "weight_decay":      self.config.weight_decay,
             "lr":                self.config.lr,
             "d_model":           self.config.d_model,
@@ -199,6 +210,7 @@ class TrainResult:
             "grok_epoch":        self.grok_epoch,
             "grok_gap":          self.grok_gap,
             "elapsed_sec":       round(self.elapsed_sec, 1),
+            "num_epochs":        int(getattr(self.config, "num_epochs", 0)),
         }
         lm = getattr(self.config, "label_mode", None)
         nc = getattr(self.config, "num_classes", None)
@@ -211,6 +223,7 @@ class TrainResult:
             out["label_mod"] = lmod
         out["rule_count"] = getattr(self.config, "rule_count", 1)
         out["data_seed"] = int(getattr(self.config, "data_seed", 42))
+        out["model_seed"] = int(getattr(self.config, "model_seed", 42))
         out["label_noise"] = float(getattr(self.config, "label_noise", 0.0))
         out["label_noise_sym"] = float(getattr(self.config, "label_noise_sym", 0.0))
         out["noise_mode"] = getattr(self.config, "noise_mode", "random_wrong_c")
@@ -219,6 +232,115 @@ class TrainResult:
         if nfb is not None:
             out["noise_fixed_backup"] = int(nfb)
         return out
+
+
+def seed_everything(seed: int) -> None:
+    """Best-effort seeding without forcing deterministic kernels."""
+    random.seed(seed)
+    if np is not None:
+        np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def seq_len_from_input_format(input_format: str) -> int:
+    seq_len_map = {
+        "a_op_b_eq": 4,
+        "a_b_eq": 3,
+        "a_op_b_eq_rule": 5,
+        "a_op_b_eq_bparity": 5,
+        "a_op_bparity_eq": 4,
+    }
+    return seq_len_map.get(input_format, 4)
+
+
+def build_sequence_model(
+    *,
+    vocab_size: int,
+    cfg: TrainConfig,
+    seq_len: int,
+    num_logits: Optional[int] = None,
+) -> Tuple[nn.Module, int]:
+    """Build either the existing standard transformer or the convexified variant."""
+    out_dim = num_logits if num_logits is not None else vocab_size
+    if cfg.model_type == "standard":
+        from models.transformer import TransformerModel, count_parameters
+
+        model = TransformerModel(
+            vocab_size=vocab_size,
+            d_model=cfg.d_model,
+            nhead=cfg.nhead,
+            num_layers=cfg.num_layers,
+            dim_feedforward=cfg.dim_feedforward,
+            seq_len=seq_len,
+            num_logits=out_dim,
+        )
+        return model, count_parameters(model)
+
+    if cfg.model_type == "convexified":
+        from models.transformer_convex import ConvexifiedTransformer, count_parameters
+
+        model = ConvexifiedTransformer(
+            vocab_size=vocab_size,
+            d_model=cfg.d_model,
+            nhead=cfg.nhead,
+            num_layers=cfg.num_layers,
+            dim_feedforward=cfg.dim_feedforward,
+            seq_len=seq_len,
+            num_logits=out_dim,
+        )
+        return model, count_parameters(model)
+
+    raise ValueError(
+        f"Unknown model_type '{cfg.model_type}'. Expected one of {MODEL_TYPE_CHOICES}."
+    )
+
+
+def build_factored_model(
+    *,
+    vocab_size: int,
+    rule_count: int,
+    p: int,
+    cfg: TrainConfig,
+    seq_len: int,
+) -> Tuple[nn.Module, int]:
+    """Build either the standard or convexified factored-head transformer."""
+    if cfg.model_type == "standard":
+        from models.transformer_factor import FactoredTransformer, count_parameters
+
+        model = FactoredTransformer(
+            vocab_size=vocab_size,
+            rule_count=rule_count,
+            p=p,
+            d_model=cfg.d_model,
+            nhead=cfg.nhead,
+            num_layers=cfg.num_layers,
+            seq_len=seq_len,
+            dim_feedforward=cfg.dim_feedforward,
+            dropout=0.0,
+        )
+        return model, count_parameters(model)
+
+    if cfg.model_type == "convexified":
+        from models.transformer_convex import ConvexifiedFactoredTransformer, count_parameters
+
+        model = ConvexifiedFactoredTransformer(
+            vocab_size=vocab_size,
+            rule_count=rule_count,
+            p=p,
+            d_model=cfg.d_model,
+            nhead=cfg.nhead,
+            num_layers=cfg.num_layers,
+            seq_len=seq_len,
+            dim_feedforward=cfg.dim_feedforward,
+            dropout=0.0,
+        )
+        return model, count_parameters(model)
+
+    raise ValueError(
+        f"Unknown model_type '{cfg.model_type}'. Expected one of {MODEL_TYPE_CHOICES}."
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -232,7 +354,7 @@ def train(
     cfg: TrainConfig,
 ) -> TrainResult:
     """
-    Train a TransformerModel according to `cfg`.
+    Train a sequence model according to `cfg`.
 
     Parameters
     ----------
@@ -245,9 +367,6 @@ def train(
     -------
     TrainResult with logged metrics and grokking detection info.
     """
-    # ── imports here to avoid circular deps ───────────────────────────────
-    from models.transformer import TransformerModel
-
     # ── device ────────────────────────────────────────────────────────────
     if cfg.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -256,40 +375,23 @@ def train(
 
     if cfg.verbose:
         print(f"Device: {device}")
+        print(f"Model type: {cfg.model_type}")
 
     # ── reproducibility ───────────────────────────────────────────────────
-    torch.manual_seed(cfg.model_seed)
+    seed_everything(cfg.model_seed)
 
     # ── model ─────────────────────────────────────────────────────────────
-    # seq_len depends on input_format:
-    #   "a_op_b_eq"       → 4 tokens
-    #   "a_b_eq"          → 3 tokens
-    #   "a_op_b_eq_rule"  → 5 tokens
-    #   "a_op_b_eq_bparity" → 5 tokens
-    #   "a_op_bparity_eq"   → 4 tokens
-    _seq_len_map = {
-        "a_op_b_eq": 4,
-        "a_b_eq": 3,
-        "a_op_b_eq_rule": 5,
-        "a_op_b_eq_bparity": 5,
-        "a_op_bparity_eq": 4,
-    }
-    seq_len = _seq_len_map.get(cfg.input_format, 4)
-
-    n_logits = cfg.num_logits if cfg.num_logits is not None else vocab_size
-    model = TransformerModel(
+    seq_len = seq_len_from_input_format(cfg.input_format)
+    model, param_count = build_sequence_model(
         vocab_size=vocab_size,
-        d_model=cfg.d_model,
-        nhead=cfg.nhead,
-        num_layers=cfg.num_layers,
-        dim_feedforward=cfg.dim_feedforward,
+        cfg=cfg,
         seq_len=seq_len,
-        num_logits=n_logits,
-    ).to(device)
+        num_logits=cfg.num_logits,
+    )
+    model = model.to(device)
 
     if cfg.verbose:
-        from models.transformer import count_parameters
-        print(f"Parameters: {count_parameters(model):,}")
+        print(f"Parameters: {param_count:,}")
 
     # ── optimiser + loss ──────────────────────────────────────────────────
     optimizer = optim.AdamW(
