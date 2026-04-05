@@ -173,6 +173,16 @@ def op_4way_all_affine(a, b, p):
         return (a + 2 * b) % p
     return (2 * a + b) % p
 
+def op_4way_add_add1_add2_add3(a, b, p):
+    """Branch on region = (a + b) mod 4: 0 -> add, 1 -> add + 1, 2 -> add + 2, 3 -> add + 3 (all mod p)."""
+    region = (a + b) % 4
+    if region == 0:
+        return (a + b) % p
+    if region == 1:
+        return (a + b + 1) % p
+    if region == 2:
+        return (a + b + 2) % p
+    return (a + b + 3) % p
 
 def op_10way_mixed_hard(a, b, p):
     """
@@ -372,6 +382,7 @@ OPERATIONS = {
     "4way_add_add2mul_sub2mul": (op_4way_add_add2mul_sub2mul, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "4way_add_sub_mul_div": (op_4way_add_sub_mul_div, False, lambda p: [(a, b) for a in range(p) for b in range(1, p)]),
     "4way_all_affine": (op_4way_all_affine, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "4way_add_add1_add2_add3": (op_4way_add_add1_add2_add3, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "10way_mixed_hard": (op_10way_mixed_hard, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add_1":  (op_add_or_add_1,  False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_nothing": (op_add_or_nothing, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
@@ -468,6 +479,7 @@ OPERATION_RULE_INFO = {
     "4way_add_add2mul_sub2mul": (4, _rid_sum_mod_m(4)),
     "4way_add_sub_mul_div": (4, _rid_sum_mod_m(4)),
     "4way_all_affine": (4, _rid_sum_mod_m(4)),
+    "4way_add_add1_add2_add3": (4, _rid_sum_mod_m(4)),
     "10way_mixed_hard": (10, _rid_sum_mod_m(10)),
 }
 
