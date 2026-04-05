@@ -119,6 +119,18 @@ def _task_line(data: dict, cfg: dict | None = None) -> str:
     rc = cfg.get("rule_count", 1)
     if isinstance(rc, int) and rc > 1:
         parts.append(f"rule_count={rc}")
+    rm = cfg.get("routing_mode")
+    if rm:
+        parts.append(f"routing={rm}")
+    schl = cfg.get("shared_c_head_layers")
+    if schl is not None and _model_type(cfg) == "standard":
+        parts.append(f"shared_c_head_layers={schl}")
+    chc = cfg.get("c_head_count")
+    if chc is not None and _model_type(cfg) == "routed_modular":
+        parts.append(f"c_head_count={chc}")
+    chl = cfg.get("routed_c_head_layers")
+    if chl is not None and _model_type(cfg) == "routed_modular":
+        parts.append(f"c_head_layers={chl}")
     infmt = cfg.get("input_format")
     if infmt and infmt != "a_op_b_eq":
         parts.append(f"fmt={infmt}")
@@ -168,6 +180,200 @@ COLORS = [
 
 def get_color(i):
     return COLORS[i % len(COLORS)]
+
+
+def _has_routed_analysis(data: dict) -> bool:
+    return isinstance(data.get("routed_analysis"), dict)
+
+
+def _matrix_to_array(rows, width: int) -> np.ndarray:
+    if not rows:
+        return np.zeros((0, width), dtype=float)
+    mat = []
+    for row in rows:
+        vals = []
+        for v in row:
+            vals.append(np.nan if v is None else float(v))
+        mat.append(vals)
+    return np.array(mat, dtype=float)
+
+
+def _plot_routed_heatmap(
+    ax,
+    matrix: np.ndarray,
+    title: str,
+    *,
+    xlabels: list[str],
+    ylabels: list[str],
+    vmin: float,
+    vmax: float,
+    cmap: str = "viridis",
+    colorbar_label: str = "",
+):
+    if matrix.size == 0:
+        ax.axis("off")
+        return
+    im = ax.imshow(matrix, aspect="auto", vmin=vmin, vmax=vmax, cmap=cmap, interpolation="nearest")
+    ax.set_title(title, fontsize=10)
+    ax.set_xlabel("Head")
+    ax.set_ylabel("True rule")
+    ax.set_xticks(range(len(xlabels)))
+    ax.set_xticklabels(xlabels, rotation=0)
+    ax.set_yticks(range(len(ylabels)))
+    ax.set_yticklabels(ylabels)
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.02, label=colorbar_label)
+
+
+def plot_routed_analysis(data: dict, out: str, show: bool):
+    routed = data.get("routed_analysis") or {}
+    train = routed.get("train") or {}
+    val = routed.get("val") or {}
+    if not train or not val:
+        return
+
+    cfg = data.get("summary") or {}
+    head_labels = routed.get("head_labels") or [f"head_{i}" for i in range(len(train.get("head_usage_freq") or []))]
+    rule_labels = routed.get("rule_labels") or [f"rule_{i}" for i in range(len(train.get("true_rule_counts") or []))]
+
+    fig, axes = plt.subplots(3, 4, figsize=(20, 13))
+
+    x = np.arange(len(head_labels))
+    axes[0, 0].bar(x, train.get("head_usage_freq") or [], color="#3B82F6")
+    axes[0, 0].set_title("Train Head Usage")
+    axes[0, 0].set_xticks(x, head_labels)
+    axes[0, 0].set_ylim(0, 1.0)
+    axes[0, 0].set_ylabel("Fraction")
+
+    axes[0, 1].bar(x, val.get("head_usage_freq") or [], color="#F97316")
+    axes[0, 1].set_title("Val Head Usage")
+    axes[0, 1].set_xticks(x, head_labels)
+    axes[0, 1].set_ylim(0, 1.0)
+    axes[0, 1].set_ylabel("Fraction")
+
+    tr_ent = train.get("routing_entropy_norm_by_true_rule") or []
+    va_ent = val.get("routing_entropy_norm_by_true_rule") or []
+    tr_ent_vals = [np.nan if v is None else float(v) for v in tr_ent]
+    va_ent_vals = [np.nan if v is None else float(v) for v in va_ent]
+    axes[0, 2].bar(np.arange(len(rule_labels)), tr_ent_vals, color="#10B981")
+    axes[0, 2].axhline(float(train.get("routing_entropy_norm_mean") or 0.0), color="#374151", linestyle="--", lw=1.2)
+    axes[0, 2].set_title("Train Routing Entropy (normalized)")
+    axes[0, 2].set_xticks(range(len(rule_labels)), rule_labels)
+    axes[0, 2].set_ylim(0, 1.05)
+    axes[0, 2].set_ylabel("Entropy / log(rule_count)")
+
+    axes[0, 3].bar(np.arange(len(rule_labels)), va_ent_vals, color="#F59E0B")
+    axes[0, 3].axhline(float(val.get("routing_entropy_norm_mean") or 0.0), color="#374151", linestyle="--", lw=1.2)
+    axes[0, 3].set_title("Val Routing Entropy (normalized)")
+    axes[0, 3].set_xticks(range(len(rule_labels)), rule_labels)
+    axes[0, 3].set_ylim(0, 1.05)
+    axes[0, 3].set_ylabel("Entropy / log(rule_count)")
+
+    _plot_routed_heatmap(
+        axes[1, 0],
+        _matrix_to_array(train.get("mean_routing_weights_by_true_rule") or [], len(head_labels)),
+        "Train Mean Routing Weights by True Rule",
+        xlabels=head_labels,
+        ylabels=rule_labels,
+        vmin=0.0,
+        vmax=1.0,
+        cmap="viridis",
+        colorbar_label="Weight",
+    )
+    _plot_routed_heatmap(
+        axes[1, 1],
+        _matrix_to_array(val.get("mean_routing_weights_by_true_rule") or [], len(head_labels)),
+        "Val Mean Routing Weights by True Rule",
+        xlabels=head_labels,
+        ylabels=rule_labels,
+        vmin=0.0,
+        vmax=1.0,
+        cmap="viridis",
+        colorbar_label="Weight",
+    )
+    _plot_routed_heatmap(
+        axes[1, 2],
+        _matrix_to_array(train.get("true_rule_vs_chosen_head_freq") or [], len(head_labels)),
+        "Train True Rule vs Chosen Head",
+        xlabels=head_labels,
+        ylabels=rule_labels,
+        vmin=0.0,
+        vmax=1.0,
+        cmap="magma",
+        colorbar_label="Fraction",
+    )
+    _plot_routed_heatmap(
+        axes[1, 3],
+        _matrix_to_array(val.get("true_rule_vs_chosen_head_freq") or [], len(head_labels)),
+        "Val True Rule vs Chosen Head",
+        xlabels=head_labels,
+        ylabels=rule_labels,
+        vmin=0.0,
+        vmax=1.0,
+        cmap="magma",
+        colorbar_label="Fraction",
+    )
+    _plot_routed_heatmap(
+        axes[2, 0],
+        _matrix_to_array(train.get("per_head_c_acc_by_true_rule") or [], len(head_labels)),
+        "Train Per-Head c Accuracy by True Rule",
+        xlabels=head_labels,
+        ylabels=rule_labels,
+        vmin=0.0,
+        vmax=1.0,
+        cmap="plasma",
+        colorbar_label="Accuracy",
+    )
+    _plot_routed_heatmap(
+        axes[2, 1],
+        _matrix_to_array(val.get("per_head_c_acc_by_true_rule") or [], len(head_labels)),
+        "Val Per-Head c Accuracy by True Rule",
+        xlabels=head_labels,
+        ylabels=rule_labels,
+        vmin=0.0,
+        vmax=1.0,
+        cmap="plasma",
+        colorbar_label="Accuracy",
+    )
+
+    axes[2, 2].axis("off")
+    axes[2, 2].text(
+        0.0,
+        1.0,
+        "\n".join(
+            [
+                f"Routing mode: {routed.get('routing_mode', cfg.get('routing_mode', '?'))}",
+                f"c_head_count: {routed.get('c_head_count', cfg.get('c_head_count', '?'))}",
+                f"c-head layers: {routed.get('routed_c_head_layers', cfg.get('routed_c_head_layers', '?'))}",
+                f"Train samples: {train.get('sample_count', '?')}",
+                f"Val samples: {val.get('sample_count', '?')}",
+                f"Train entropy mean: {train.get('routing_entropy_mean')}",
+                f"Val entropy mean: {val.get('routing_entropy_mean')}",
+                "",
+                "Panels:",
+                "- head usage frequency",
+                "- routing entropy by true rule",
+                "- mean routing weights by true rule",
+                "- true rule vs chosen head",
+                "- per-head c accuracy by true rule",
+            ],
+        ),
+        va="top",
+        ha="left",
+        fontsize=10,
+        family="monospace",
+    )
+    axes[2, 3].axis("off")
+
+    fig.suptitle(
+        f"Routed Analysis\n{_readable_name(cfg)}\n{_task_line(data, cfg)}",
+        fontsize=12,
+    )
+    plt.tight_layout()
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"Saved -> {out}")
+    if show:
+        plt.show()
+    plt.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -397,6 +603,15 @@ def _readable_name(cfg: dict) -> str:
     except (TypeError, ValueError):
         tf_pct = tf
     base = f"{op}  (p={p}, {mt})  ·  wd={wd}  lr={lr}  d={d}  train={tf_pct}%  ep={ep}"
+    schl = cfg.get("shared_c_head_layers")
+    if schl is not None and mt == "standard":
+        base = f"{base}  ·  shared_c_head_layers={schl}"
+    chc = cfg.get("c_head_count")
+    if chc is not None and mt == "routed_modular":
+        base = f"{base}  ·  c_head_count={chc}"
+    chl = cfg.get("routed_c_head_layers")
+    if chl is not None and mt == "routed_modular":
+        base = f"{base}  ·  c_head_layers={chl}"
     infmt = cfg.get("input_format")
     if infmt and infmt != "a_op_b_eq":
         base = f"{base}  ·  fmt={infmt}"
@@ -488,17 +703,38 @@ def main():
         tf = int(float(cfg0.get("train_frac", 0.5)) * 100)
         mt = _infer_plot_model_tag(results)
         mt_safe = str(mt).replace(" ", "_")
+        schl = cfg0.get("shared_c_head_layers")
+        schl_seg = (
+            f"_schl{schl}"
+            if schl is not None and _model_type(cfg0) == "standard" and int(schl) != 1
+            else ""
+        )
+        chc = cfg0.get("c_head_count")
+        chc_seg = (
+            f"_chc{chc}"
+            if chc is not None and _model_type(cfg0) == "routed_modular"
+            else ""
+        )
+        chl = cfg0.get("routed_c_head_layers")
+        chl_seg = (
+            f"_chl{chl}"
+            if chl is not None and _model_type(cfg0) == "routed_modular"
+            else ""
+        )
         if mode == "sweep":
-            out_path = f"plots/{op}_model-{mt_safe}_sweep_{args.sweep_param}_tf{tf}_ep{ep}.png"
+            out_path = f"plots/{op}_model-{mt_safe}{schl_seg}{chc_seg}{chl_seg}_sweep_{args.sweep_param}_tf{tf}_ep{ep}.png"
         elif mode == "single":
             wd = cfg0.get("weight_decay", "")
             lr = cfg0.get("lr", "")
-            out_path = f"plots/{op}_model-{mt_safe}_wd{wd}_lr{lr}_tf{tf}_ep{ep}.png"
+            out_path = f"plots/{op}_model-{mt_safe}{schl_seg}{chc_seg}{chl_seg}_wd{wd}_lr{lr}_tf{tf}_ep{ep}.png"
         else:
-            out_path = f"plots/grid_{op}_model-{mt_safe}_n{len(results)}_tf{tf}_ep{ep}.png"
+            out_path = f"plots/grid_{op}_model-{mt_safe}{schl_seg}{chc_seg}{chl_seg}_n{len(results)}_tf{tf}_ep{ep}.png"
 
     if mode == "single":
         plot_single(results[0], out_path, show)
+        if _has_routed_analysis(results[0]):
+            stem, ext = os.path.splitext(out_path)
+            plot_routed_analysis(results[0], f"{stem}_routing{ext}", show)
     elif mode == "sweep":
         plot_sweep(results, args.sweep_param, args.metric, out_path, show)
     else:  # grid

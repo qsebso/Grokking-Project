@@ -1,0 +1,30 @@
+{
+  "summary_row": {
+    "path": "results\\add_or_mul_p17_wd1.0_lr0.001_d128_l2_tf0.5_fmta_op_b_eq_bparity_mtrouted_modular_rmsoft_chl3_factor_joint_rc2_ep10.json",
+    "operation": "add_or_mul",
+    "p": 17,
+    "rule_count": 2,
+    "num_classes": 34,
+    "model_type": "routed_modular",
+    "routing_mode": "soft",
+    "routed_c_head_layers": 3,
+    "branch_metric": "b_parity",
+    "branch_label_1": "odd",
+    "branch_label_2": "even",
+    "last_log_epoch": 10,
+    "train_acc_last": 0.1458333283662796,
+    "val_acc_last": 0.08965517580509186,
+    "train_acc_mean_logs": 0.1423611119389534,
+    "val_acc_mean_logs": 0.08965517580509186,
+    "label_noise": 0.0,
+    "label_noise_sym": 0.0,
+    "train_branch1_last": 0.9375,
+    "train_branch2_last": 1.0,
+    "val_branch1_last": 0.944444477558136,
+    "val_branch2_last": 1.0,
+    "macro_mean_over_rules_train": null,
+    "macro_mean_over_rules_val": null,
+    "micro_mean_over_rules_train": null,
+    "micro_mean_over_rules_val": null
+  }
+}

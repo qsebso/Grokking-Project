@@ -30,13 +30,17 @@ class FactoredTransformer(nn.Module):
         seq_len: int = 4,
         dim_feedforward: Optional[int] = None,
         dropout: float = 0.0,
+        shared_c_head_layers: int = 1,
     ):
         super().__init__()
         if dim_feedforward is None:
             dim_feedforward = 4 * d_model
+        if shared_c_head_layers < 1:
+            raise ValueError("shared_c_head_layers must be >= 1")
 
         self.rule_count = int(rule_count)
         self.p = int(p)
+        self.shared_c_head_layers = int(shared_c_head_layers)
 
         self.embedding = nn.Embedding(vocab_size, d_model)
         encoder_layer = nn.TransformerEncoderLayer(
@@ -48,7 +52,27 @@ class FactoredTransformer(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.head_rule = nn.Linear(d_model, self.rule_count)
-        self.head_c = nn.Linear(d_model, self.p)
+        self.head_c = self._build_shared_c_head(
+            d_model=d_model,
+            p=self.p,
+            shared_c_head_layers=self.shared_c_head_layers,
+        )
+
+    @staticmethod
+    def _build_shared_c_head(
+        d_model: int,
+        p: int,
+        shared_c_head_layers: int,
+    ) -> nn.Module:
+        if shared_c_head_layers == 1:
+            return nn.Linear(d_model, p)
+
+        layers = []
+        for _ in range(shared_c_head_layers - 1):
+            layers.append(nn.Linear(d_model, d_model))
+            layers.append(nn.GELU())
+        layers.append(nn.Linear(d_model, p))
+        return nn.Sequential(*layers)
 
     def forward(
         self, x: torch.Tensor, return_hidden: bool = False

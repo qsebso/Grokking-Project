@@ -184,6 +184,20 @@ def op_4way_add_add1_add2_add3(a, b, p):
         return (a + b + 2) % p
     return (a + b + 3) % p
 
+def op_5way_add_mul_div_sub_2mul(a, b, p):
+    """Branch on region = (a + b) mod 5: 0 -> add, 1 -> mul, 2 -> div, 3 -> sub, 4 -> 2mul (all mod p)."""
+    region = (a + b) % 5
+    if region == 0:
+        return (a + b) % p
+    if region == 1:
+        return (a * b) % p
+    if region == 2:
+        return (a * pow(int(b), -1, p)) % p
+    if region == 3:
+        return (a - b) % p
+    if region == 4:
+        return (2*(a * b)) % p
+
 def op_10way_mixed_hard(a, b, p):
     """
     Ten-way split: ``region = (a + b) % 10``. Full ``p×p`` domain (no division).
@@ -383,6 +397,7 @@ OPERATIONS = {
     "4way_add_sub_mul_div": (op_4way_add_sub_mul_div, False, lambda p: [(a, b) for a in range(p) for b in range(1, p)]),
     "4way_all_affine": (op_4way_all_affine, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "4way_add_add1_add2_add3": (op_4way_add_add1_add2_add3, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
+    "5way_add_mul_div_sub_2mul": (op_5way_add_mul_div_sub_2mul, False, lambda p: [(a, b) for a in range(p) for b in range(1, p)]),
     "10way_mixed_hard": (op_10way_mixed_hard, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_add_1":  (op_add_or_add_1,  False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
     "add_or_nothing": (op_add_or_nothing, False, lambda p: [(a, b) for a in range(p) for b in range(p)]),
@@ -480,6 +495,7 @@ OPERATION_RULE_INFO = {
     "4way_add_sub_mul_div": (4, _rid_sum_mod_m(4)),
     "4way_all_affine": (4, _rid_sum_mod_m(4)),
     "4way_add_add1_add2_add3": (4, _rid_sum_mod_m(4)),
+    "5way_add_mul_div_sub_2mul": (5, _rid_sum_mod_m(5)),
     "10way_mixed_hard": (10, _rid_sum_mod_m(10)),
 }
 

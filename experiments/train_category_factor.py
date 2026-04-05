@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -62,6 +63,126 @@ class TrainFactorConfig(TrainConfig):
     """``TrainConfig`` + factor experiment mode."""
 
     factor_mode: str = "joint"  # joint | rule_only | c_only
+    routing_mode: str = "hard"  # hard | soft (used by routed_modular)
+    routed_c_head_layers: int = 3  # number of Linear layers per routed c-head
+    c_head_count: Optional[int] = None  # number of routed c-heads; default resolves to rule_count
+    shared_c_head_layers: int = 1  # number of Linear layers in shared non-routed c-head
+
+
+def _mean_or_none(x: torch.Tensor) -> Optional[float]:
+    if x.numel() == 0:
+        return None
+    return float(x.float().mean().item())
+
+
+def _compute_routed_split_analysis(
+    routing_weights: torch.Tensor,
+    chosen_head: torch.Tensor,
+    all_c_logits: torch.Tensor,
+    y_rule: torch.Tensor,
+    y_c: torch.Tensor,
+    rule_count: int,
+) -> Dict[str, Any]:
+    sample_count = int(y_rule.numel())
+    head_count = int(routing_weights.shape[1])
+    head_usage_counts = torch.bincount(chosen_head, minlength=head_count)
+    head_usage_freq = (
+        head_usage_counts.float() / max(1, sample_count)
+    ).detach().cpu().tolist()
+
+    safe_weights = routing_weights.clamp_min(1e-12)
+    entropy = -(safe_weights * safe_weights.log()).sum(dim=-1)
+    if rule_count > 1:
+        entropy_norm = entropy / math.log(rule_count)
+    else:
+        entropy_norm = torch.zeros_like(entropy)
+
+    per_head_preds = all_c_logits.argmax(dim=-1)
+    per_head_correct = per_head_preds.eq(y_c.unsqueeze(1))
+
+    mean_weights_by_true_rule: List[List[Optional[float]]] = []
+    per_head_c_acc_by_true_rule: List[List[Optional[float]]] = []
+    confusion_counts: List[List[int]] = []
+    confusion_freq_by_true_rule: List[List[Optional[float]]] = []
+    entropy_by_true_rule: List[Optional[float]] = []
+    entropy_norm_by_true_rule: List[Optional[float]] = []
+    true_rule_counts: List[int] = []
+
+    for rid in range(rule_count):
+        mask = y_rule.eq(rid)
+        count = int(mask.sum().item())
+        true_rule_counts.append(count)
+        if count == 0:
+            mean_weights_by_true_rule.append([None] * head_count)
+            per_head_c_acc_by_true_rule.append([None] * head_count)
+            confusion_counts.append([0] * head_count)
+            confusion_freq_by_true_rule.append([None] * head_count)
+            entropy_by_true_rule.append(None)
+            entropy_norm_by_true_rule.append(None)
+            continue
+
+        mean_weights_by_true_rule.append(
+            routing_weights[mask].float().mean(dim=0).detach().cpu().tolist()
+        )
+        per_head_c_acc_by_true_rule.append(
+            per_head_correct[mask].float().mean(dim=0).detach().cpu().tolist()
+        )
+        row_counts = torch.bincount(chosen_head[mask], minlength=head_count)
+        confusion_counts.append(row_counts.detach().cpu().tolist())
+        confusion_freq_by_true_rule.append(
+            (row_counts.float() / count).detach().cpu().tolist()
+        )
+        entropy_by_true_rule.append(float(entropy[mask].mean().item()))
+        entropy_norm_by_true_rule.append(float(entropy_norm[mask].mean().item()))
+
+    return {
+        "sample_count": sample_count,
+        "head_usage_counts": head_usage_counts.detach().cpu().tolist(),
+        "head_usage_freq": head_usage_freq,
+        "routing_entropy_mean": _mean_or_none(entropy),
+        "routing_entropy_norm_mean": _mean_or_none(entropy_norm),
+        "true_rule_counts": true_rule_counts,
+        "mean_routing_weights_by_true_rule": mean_weights_by_true_rule,
+        "per_head_c_acc_by_true_rule": per_head_c_acc_by_true_rule,
+        "true_rule_vs_chosen_head_counts": confusion_counts,
+        "true_rule_vs_chosen_head_freq": confusion_freq_by_true_rule,
+        "routing_entropy_by_true_rule": entropy_by_true_rule,
+        "routing_entropy_norm_by_true_rule": entropy_norm_by_true_rule,
+    }
+
+
+def _compute_routed_analysis(
+    model: torch.nn.Module,
+    x: torch.Tensor,
+    y_rule: torch.Tensor,
+    y_c: torch.Tensor,
+    rule_count: int,
+) -> Dict[str, Any]:
+    _ = model(x)
+    info = getattr(model, "last_routing_info", {}) or {}
+    all_c_logits = info.get("all_c_logits")
+    chosen_head = info.get("chosen_head")
+    if all_c_logits is None or chosen_head is None:
+        raise RuntimeError("Routed model did not expose all_c_logits / chosen_head.")
+
+    routing_weights = info.get("routing_weights")
+    if routing_weights is None:
+        routing_weights = torch.zeros(
+            chosen_head.shape[0],
+            rule_count,
+            device=chosen_head.device,
+            dtype=all_c_logits.dtype,
+        )
+        routing_weights.scatter_(1, chosen_head.view(-1, 1), 1.0)
+
+    return _compute_routed_split_analysis(
+        routing_weights=routing_weights,
+        chosen_head=chosen_head,
+        all_c_logits=all_c_logits,
+        y_rule=y_rule,
+        y_c=y_c,
+        rule_count=rule_count,
+    )
 
 
 def _save_factor_result(
@@ -74,6 +195,28 @@ def _save_factor_result(
     mts = f"_n{cfg.max_train_samples}" if cfg.max_train_samples else ""
     fmt = f"_fmt{cfg.input_format}" if cfg.input_format != "a_op_b_eq" else ""
     mt = f"_mt{cfg.model_type}" if getattr(cfg, "model_type", "standard") != "standard" else ""
+    rm = (
+        f"_rm{cfg.routing_mode}"
+        if getattr(cfg, "model_type", "standard") == "routed_modular"
+        else ""
+    )
+    chc = (
+        f"_chc{cfg.c_head_count}"
+        if getattr(cfg, "model_type", "standard") == "routed_modular"
+        and getattr(cfg, "c_head_count", None) is not None
+        else ""
+    )
+    schl = (
+        f"_schl{cfg.shared_c_head_layers}"
+        if getattr(cfg, "shared_c_head_layers", 1) != 1
+        and getattr(cfg, "model_type", "standard") == "standard"
+        else ""
+    )
+    chl = (
+        f"_chl{cfg.routed_c_head_layers}"
+        if getattr(cfg, "model_type", "standard") == "routed_modular"
+        else ""
+    )
     nz = noise_fname_suffix(cfg)
     fname = (
         f"{cfg.operation}_p{cfg.p}"
@@ -82,7 +225,7 @@ def _save_factor_result(
         f"_d{cfg.d_model}"
         f"_l{cfg.num_layers}"
         f"_tf{cfg.train_frac}"
-        f"{mts}{fmt}{mt}{nz}"
+        f"{mts}{fmt}{mt}{rm}{chc}{schl}{chl}{nz}"
         f"_factor_{cfg.factor_mode}"
         f"_rc{cfg.rule_count}"
         f"_ep{cfg.num_epochs}.json"
@@ -91,6 +234,11 @@ def _save_factor_result(
     summ = result.summary()
     summ["factor_mode"] = cfg.factor_mode
     summ["label_mode"] = "c"
+    summ["shared_c_head_layers"] = int(getattr(cfg, "shared_c_head_layers", 1))
+    if getattr(cfg, "model_type", "standard") == "routed_modular":
+        summ["routing_mode"] = cfg.routing_mode
+        summ["routed_c_head_layers"] = int(cfg.routed_c_head_layers)
+        summ["c_head_count"] = int(cfg.c_head_count if cfg.c_head_count is not None else cfg.rule_count)
     payload: Dict[str, Any] = {
         "task": "categorical_factor",
         "summary": summ,
@@ -143,7 +291,12 @@ def train_factor_run(
         "factor_mode": mode,
         "p": p,
         "rule_count": rule_count,
+        "shared_c_head_layers": int(getattr(cfg, "shared_c_head_layers", 1)),
     }
+    if cfg.model_type == "routed_modular":
+        extra["routing_mode"] = cfg.routing_mode
+        extra["routed_c_head_layers"] = int(cfg.routed_c_head_layers)
+        extra["c_head_count"] = int(cfg.c_head_count if cfg.c_head_count is not None else rule_count)
 
     if mode == "joint":
         model, param_count = build_factored_model(
@@ -196,6 +349,16 @@ def train_factor_run(
 
     if cfg.verbose:
         print(f"Model type: {cfg.model_type}")
+        if cfg.model_type == "standard":
+            if int(getattr(cfg, "shared_c_head_layers", 1)) == 1:
+                print("Shared c-head: linear")
+            else:
+                print(f"Shared c-head: MLP ({cfg.shared_c_head_layers} layers)")
+        if cfg.model_type == "routed_modular":
+            print(f"Routing mode: {cfg.routing_mode}")
+            print(f"c_head_count: {cfg.c_head_count if cfg.c_head_count is not None else rule_count}")
+            print(f"rule_count: {rule_count}")
+            print(f"Routed c-head layers: {cfg.routed_c_head_layers}")
         print(f"Factor mode: {mode}  ({train_target_desc})  device={device}")
 
     loader = None
@@ -338,6 +501,8 @@ def train_factor_run(
     if mode == "joint":
         extra["train_acc_rule"] = tr_r
         extra["val_acc_rule"] = va_r
+        extra["train_acc_predicted_rule"] = tr_r
+        extra["val_acc_predicted_rule"] = va_r
         extra["train_acc_c_local"] = tr_c
         extra["val_acc_c_local"] = va_c
         extra["train_acc_joint"] = tr_j
@@ -346,6 +511,33 @@ def train_factor_run(
             "train_accs/val_accs are JOINT (both rule and c correct). "
             "See train_acc_rule, val_acc_rule, train_acc_c_local, val_acc_c_local for heads."
         )
+        if cfg.model_type == "routed_modular":
+            model.eval()
+            with torch.no_grad():
+                extra["routed_analysis"] = {
+                    "routing_mode": cfg.routing_mode,
+                    "c_head_count": int(cfg.c_head_count if cfg.c_head_count is not None else rule_count),
+                    "routed_c_head_layers": int(cfg.routed_c_head_layers),
+                    "head_labels": [
+                        f"head_{i}"
+                        for i in range(int(cfg.c_head_count if cfg.c_head_count is not None else rule_count))
+                    ],
+                    "rule_labels": [f"rule_{i}" for i in range(rule_count)],
+                    "train": _compute_routed_analysis(
+                        model=model,
+                        x=x_tr,
+                        y_rule=y_rule_tr,
+                        y_c=y_c_tr,
+                        rule_count=rule_count,
+                    ),
+                    "val": _compute_routed_analysis(
+                        model=model,
+                        x=x_va,
+                        y_rule=y_rule_va,
+                        y_c=y_c_va,
+                        rule_count=rule_count,
+                    ),
+                }
     else:
         extra["note"] = f"Single head: {mode}; train_accs/val_accs match that target only."
 
@@ -505,6 +697,30 @@ def _build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--nhead", type=int, default=4)
     p.add_argument("--num_layers", type=int, default=2)
     p.add_argument("--model_type", default="standard", choices=MODEL_TYPE_CHOICES)
+    p.add_argument(
+        "--routing_mode",
+        default="hard",
+        choices=["hard", "soft"],
+        help="Routing mode for routed_modular. Ignored for other model types.",
+    )
+    p.add_argument(
+        "--c_head_count",
+        type=int,
+        default=None,
+        help="Number of routed c-heads for routed_modular. Default: rule_count.",
+    )
+    p.add_argument(
+        "--shared_c_head_layers",
+        type=int,
+        default=1,
+        help="Number of Linear layers in the shared non-routed c-head (1 = linear).",
+    )
+    p.add_argument(
+        "--routed_c_head_layers",
+        type=int,
+        default=3,
+        help="Number of Linear layers in each routed c-head MLP (default: 3).",
+    )
     p.add_argument("--branch_metric", default="auto", choices=["auto", "b_parity", "a_ge_b", "a_gt_b"])
     p.add_argument("--rule_count", type=int, default=2)
     p.add_argument(
@@ -548,6 +764,10 @@ if __name__ == "__main__":
         nhead=args.nhead,
         num_layers=args.num_layers,
         model_type=args.model_type,
+        routing_mode=args.routing_mode,
+        c_head_count=args.c_head_count,
+        shared_c_head_layers=args.shared_c_head_layers,
+        routed_c_head_layers=args.routed_c_head_layers,
         branch_metric=args.branch_metric,
         verbose=not args.quiet,
         rule_count=args.rule_count,

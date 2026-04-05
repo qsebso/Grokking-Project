@@ -1,0 +1,26 @@
+Categorical task  ·  label_mode=c
+====================================================
+Source JSON (relative): results\add_or_mul_p17_wd1.0_lr0.001_d128_l2_tf0.5_fmta_op_b_eq_bparity_mtrouted_modular_rmsoft_chl2_factor_joint_rc2_ep10.json
+Operation: add_or_mul   p=17   rule_count=2
+Model: routed_modular   routing_mode: soft   routed_c_head_layers: 2
+num_classes: 34   branch: b_parity
+  branches: odd / even
+Train label noise — asymmetric: 0.0   symmetric: 0.0
+
+Accuracy (overall)
+  Last logged epoch (10):
+    train = 0.1597222238779068
+    val   = 0.09655172377824783
+  Mean over all log checkpoints:
+    train = 0.149305559694767
+    val   = 0.09655172377824783
+
+Branch accuracies (last log)
+  train odd = 0.9375
+  train even = 1.0
+  val   odd = 0.944444477558136
+  val   even = 1.0
+
+Per-rule band summaries (see plots for every class)
+  macro mean over rules — train: None  val: None
+  micro mean over rules — train: None  val: None

@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - numpy is optional here
     np = None
 
 
-MODEL_TYPE_CHOICES = ("standard", "convexified")
+MODEL_TYPE_CHOICES = ("standard", "convexified", "routed_modular")
 
 
 def _get_a_token_column(x: torch.Tensor, input_format: str) -> torch.Tensor:
@@ -319,6 +319,7 @@ def build_factored_model(
             seq_len=seq_len,
             dim_feedforward=cfg.dim_feedforward,
             dropout=0.0,
+            shared_c_head_layers=getattr(cfg, "shared_c_head_layers", 1),
         )
         return model, count_parameters(model)
 
@@ -335,6 +336,25 @@ def build_factored_model(
             seq_len=seq_len,
             dim_feedforward=cfg.dim_feedforward,
             dropout=0.0,
+        )
+        return model, count_parameters(model)
+
+    if cfg.model_type == "routed_modular":
+        from models.transformer_routed import RoutedModularTransformer, count_parameters
+
+        model = RoutedModularTransformer(
+            vocab_size=vocab_size,
+            rule_count=rule_count,
+            p=p,
+            d_model=cfg.d_model,
+            nhead=cfg.nhead,
+            num_layers=cfg.num_layers,
+            seq_len=seq_len,
+            dim_feedforward=cfg.dim_feedforward,
+            dropout=0.0,
+            routing_mode=getattr(cfg, "routing_mode", "hard"),
+            c_head_layers=getattr(cfg, "routed_c_head_layers", 3),
+            c_head_count=getattr(cfg, "c_head_count", rule_count),
         )
         return model, count_parameters(model)
 
